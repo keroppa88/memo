@@ -543,6 +543,8 @@
       <label>Bin ID <span style="color:var(--danger)">*</span></label>
       <input type="text" id="cfg-binid" placeholder="64abcd1234567890abcdef12">
       <div class="hint">JSONBin の Bin ID（空欄の場合は保存時に自動作成）</div>
+      <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="copyShareUrl()">🔗 閲覧用URLをコピー</button>
+      <div id="share-url-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:none;word-break:break-all;"></div>
     </div>
     <div class="field">
       <label>API Key (X-Master-Key)　<span style="font-weight:400;color:var(--text-muted)">— 編集者のみ入力</span></label>
@@ -612,11 +614,17 @@ const POLL_INTERVAL = 30000; // 30秒
 // ─── Init ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
+  // URLパラメータ ?bin=xxx があれば優先（閲覧者はリンクを開くだけでOK）
+  const urlBin = new URLSearchParams(location.search).get('bin');
+  if (urlBin) cfg.binId = urlBin;
+
   if (cfg.binId) {
     await loadFromBin();
-  } else {
+  } else if (cfg.apiKey) {
+    // APIキーはあるがBin IDがない → 設定を開く
     openSettings();
   }
+  // Bin IDもAPIキーもない → 空の状態で表示（閲覧者はURLにbinを付けてアクセス）
   applyReadonlyMode();
   renderPageList();
   startPollingIfReadonly();
@@ -641,6 +649,18 @@ function openSettings() {
 
 function closeSettings() {
   document.getElementById('settings-modal').classList.remove('open');
+  document.getElementById('share-url-hint').style.display = 'none';
+}
+
+function copyShareUrl() {
+  const binId = document.getElementById('cfg-binid').value.trim() || cfg.binId;
+  if (!binId) { alert('先に Bin ID を入力してください'); return; }
+  const url = `${location.origin}${location.pathname}?bin=${binId}`;
+  navigator.clipboard.writeText(url).then(() => {
+    const hint = document.getElementById('share-url-hint');
+    hint.textContent = '✅ コピーしました: ' + url;
+    hint.style.display = 'block';
+  });
 }
 
 async function saveSettings() {
