@@ -606,6 +606,8 @@ let wikiData = { pages: [] };  // { pages: [{id, title, content, history:[{ts,co
 let currentPageId = null;
 let dirty = false;
 let deleteTargetId = null;
+let pollTimer = null;
+const POLL_INTERVAL = 30000; // 30秒
 
 // ─── Init ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -617,6 +619,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   applyReadonlyMode();
   renderPageList();
+  startPollingIfReadonly();
 });
 
 // ─── Config ──────────────────────────────────────────
@@ -647,6 +650,7 @@ async function saveSettings() {
   localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
   closeSettings();
   applyReadonlyMode();
+  startPollingIfReadonly();
   if (cfg.binId) {
     await loadFromBin();
     renderPageList();
@@ -667,6 +671,49 @@ function applyReadonlyMode() {
   const editor     = document.getElementById('editor');
   if (titleInput) titleInput.readOnly = ro;
   if (editor)     editor.readOnly     = ro;
+}
+
+// ─── Auto-poll (readonly mode) ───────────────────────
+function startPollingIfReadonly() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (!isReadonly() || !cfg.binId) return;
+  pollTimer = setInterval(async () => {
+    await pollUpdate();
+  }, POLL_INTERVAL);
+}
+
+async function pollUpdate() {
+  if (!cfg.binId) return;
+  try {
+    const headers = {};
+    if (cfg.apiKey) headers['X-Master-Key'] = cfg.apiKey;
+    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, { headers });
+    if (!res.ok) return;
+    const json = await res.json();
+    const fresh = json.record || { pages: [] };
+    if (!Array.isArray(fresh.pages)) fresh.pages = [];
+
+    // ページ数や内容に変化があれば更新
+    if (JSON.stringify(fresh) === JSON.stringify(wikiData)) return;
+    wikiData = fresh;
+    renderPageList();
+
+    // 現在開いているページが更新されていたら内容を反映
+    if (currentPageId) {
+      const page = getPage(currentPageId);
+      if (page) {
+        document.getElementById('page-title-input').value = page.title;
+        document.getElementById('editor').value = page.content;
+        if (currentMode === 'preview') renderPreview();
+        setStatus('更新を取得しました — ' + new Date().toLocaleTimeString('ja-JP'));
+      } else {
+        // 現在のページが削除された
+        currentPageId = null;
+        showEmpty();
+        setStatus('このページは削除されました', true);
+      }
+    }
+  } catch (_) { /* ネットワークエラーは無視 */ }
 }
 
 // ─── JSONBin API ─────────────────────────────────────
