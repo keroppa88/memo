@@ -604,6 +604,7 @@
 // ─── State ───────────────────────────────────────────
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
 let cfg = { apiKey: '', binId: '', histMax: 20 };
+let readKey = ''; // URLの ?key= から取得（読み取り専用キー）
 let wikiData = { pages: [] };  // { pages: [{id, title, content, history:[{ts,content}]}] }
 let currentPageId = null;
 let dirty = false;
@@ -614,9 +615,10 @@ const POLL_INTERVAL = 10000; // 10秒
 // ─── Init ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
-  // URLパラメータ ?bin=xxx があれば優先（閲覧者はリンクを開くだけでOK）
-  const urlBin = new URLSearchParams(location.search).get('bin');
-  if (urlBin) cfg.binId = urlBin;
+  // URLパラメータから bin と key を取得（閲覧者はリンクを開くだけでOK）
+  const params = new URLSearchParams(location.search);
+  if (params.get('bin')) cfg.binId = params.get('bin');
+  if (params.get('key')) readKey = params.get('key'); // 読み取り専用キー（書き込みには使わない）
 
   if (cfg.binId) {
     await loadFromBin();
@@ -654,8 +656,9 @@ function closeSettings() {
 
 function copyShareUrl() {
   const binId = document.getElementById('cfg-binid').value.trim() || cfg.binId;
+  const key   = document.getElementById('cfg-apikey').value.trim() || cfg.apiKey;
   if (!binId) { alert('先に Bin ID を入力してください'); return; }
-  const url = `${location.origin}${location.pathname}?bin=${binId}`;
+  const url = `${location.origin}${location.pathname}?bin=${binId}&key=${encodeURIComponent(key)}`;
   navigator.clipboard.writeText(url).then(() => {
     const hint = document.getElementById('share-url-hint');
     hint.textContent = '✅ コピーしました: ' + url;
@@ -702,12 +705,17 @@ function startPollingIfReadonly() {
   }, POLL_INTERVAL);
 }
 
+function readHeaders() {
+  const h = { 'Cache-Control': 'no-cache' };
+  const key = cfg.apiKey || readKey;
+  if (key) h['X-Master-Key'] = key;
+  return h;
+}
+
 async function pollUpdate() {
   if (!cfg.binId) return;
   try {
-    const headers = { 'Cache-Control': 'no-cache' };
-    if (cfg.apiKey) headers['X-Master-Key'] = cfg.apiKey;
-    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest?t=${Date.now()}`, { headers, cache: 'no-store' });
+    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest?t=${Date.now()}`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) return;
     const json = await res.json();
     const fresh = json.record || { pages: [] };
@@ -741,9 +749,7 @@ async function loadFromBin() {
   if (!cfg.binId) return;
   setStatus('読み込み中…', false);
   try {
-    const headers = {};
-    if (cfg.apiKey) headers['X-Master-Key'] = cfg.apiKey;
-    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, { headers });
+    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     wikiData = json.record || { pages: [] };
