@@ -1098,38 +1098,30 @@ function embedTweets(container) {
   const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
   if (divs.length === 0) return;
 
-  const loadScript = () => {
-    if (!window.twttr) {
-      const s = document.createElement('script');
-      s.src = 'https://platform.twitter.com/widgets.js';
-      s.async = true;
-      document.head.appendChild(s);
-    }
+  const processDivs = () => {
+    divs.forEach(div => {
+      const url = div.dataset.tweetUrl;
+      if (!url) return;
+      div.removeAttribute('data-tweet-url');
+      const m = url.match(/\/status\/(\d+)/);
+      if (!m) return;
+      window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
+    });
   };
 
-  divs.forEach(div => {
-    const url = div.dataset.tweetUrl;
-    div.removeAttribute('data-tweet-url');
-    // widgets.js は x.com を認識しないので twitter.com に正規化し、クエリパラメータを除去
-    const embedUrl = url.replace(/^https?:\/\/x\.com\//, 'https://twitter.com/').replace(/\?.*$/, '');
-    const blockquote = document.createElement('blockquote');
-    blockquote.className = 'twitter-tweet';
-    blockquote.setAttribute('data-lang', 'ja');
-    const a = document.createElement('a');
-    a.href = embedUrl;
-    a.textContent = url;
-    blockquote.appendChild(a);
-    div.appendChild(blockquote);
-  });
+  if (!window.twttr) {
+    const s = document.createElement('script');
+    s.src = 'https://platform.twitter.com/widgets.js';
+    s.charset = 'utf-8';
+    s.async = true;
+    document.head.appendChild(s);
+  }
 
-  loadScript();
-
-  // Poll until twttr is ready then load widgets
   let tries = 0;
   const tryLoad = () => {
-    if (window.twttr && window.twttr.widgets) {
-      window.twttr.widgets.load(container);
-    } else if (tries++ < 20) {
+    if (window.twttr && window.twttr.widgets && window.twttr.widgets.createTweet) {
+      processDivs();
+    } else if (tries++ < 30) {
       setTimeout(tryLoad, 300);
     }
   };
