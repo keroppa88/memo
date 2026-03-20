@@ -1111,7 +1111,8 @@ function embedTweets(container) {
     const url = div.dataset.tweetUrl;
     div.removeAttribute('data-tweet-url');
     const a = document.createElement('a');
-    a.href = url;
+    // widgets.js は x.com を認識しないので twitter.com に正規化
+    a.href = url.replace(/^https?:\/\/x\.com\//, 'https://twitter.com/');
     a.className = 'twitter-tweet';
     a.setAttribute('data-lang', 'ja');
     a.textContent = url;
