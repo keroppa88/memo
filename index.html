@@ -1110,13 +1110,16 @@ function embedTweets(container) {
   divs.forEach(div => {
     const url = div.dataset.tweetUrl;
     div.removeAttribute('data-tweet-url');
+    // widgets.js は x.com を認識しないので twitter.com に正規化し、クエリパラメータを除去
+    const embedUrl = url.replace(/^https?:\/\/x\.com\//, 'https://twitter.com/').replace(/\?.*$/, '');
+    const blockquote = document.createElement('blockquote');
+    blockquote.className = 'twitter-tweet';
+    blockquote.setAttribute('data-lang', 'ja');
     const a = document.createElement('a');
-    // widgets.js は x.com を認識しないので twitter.com に正規化
-    a.href = url.replace(/^https?:\/\/x\.com\//, 'https://twitter.com/');
-    a.className = 'twitter-tweet';
-    a.setAttribute('data-lang', 'ja');
+    a.href = embedUrl;
     a.textContent = url;
-    div.appendChild(a);
+    blockquote.appendChild(a);
+    div.appendChild(blockquote);
   });
 
   loadScript();
