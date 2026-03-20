@@ -52,6 +52,16 @@
     text-overflow: ellipsis;
   }
 
+  #readonly-badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    background: #fef3c7;
+    color: #92400e;
+    border-radius: 10px;
+    border: 1px solid #fcd34d;
+    white-space: nowrap;
+  }
+
   #menu-btn {
     display: none;
     background: none;
@@ -479,6 +489,7 @@
 <header id="header">
   <button id="menu-btn" title="メニュー" onclick="toggleSidebar()">☰</button>
   <h1>📝 Wiki</h1>
+  <span id="readonly-badge" style="display:none">👁 閲覧のみ</span>
   <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
 </header>
 
@@ -490,7 +501,7 @@
   <nav id="sidebar">
     <div id="sidebar-header">
       <input id="search-box" type="search" placeholder="ページを検索…" oninput="filterPages(this.value)">
-      <button class="btn-icon" title="新規ページ" onclick="newPage()">＋</button>
+      <button class="btn-icon" id="new-page-btn" title="新規ページ" onclick="newPage()">＋</button>
     </div>
     <div id="page-list"></div>
   </nav>
@@ -500,7 +511,7 @@
     <div id="empty-state">
       <div class="icon">📄</div>
       <p>ページを選択するか、新規作成してください</p>
-      <button class="btn btn-primary" onclick="newPage()">＋ 新規ページ</button>
+      <button class="btn btn-primary" id="empty-new-btn" onclick="newPage()">＋ 新規ページ</button>
     </div>
 
     <div id="editor-wrapper" style="display:none; flex:1; flex-direction:column; overflow:hidden; display:none;">
@@ -529,14 +540,14 @@
   <div class="modal">
     <h2>⚙ 設定</h2>
     <div class="field">
-      <label>JSONBin API Key (X-Master-Key)</label>
-      <input type="password" id="cfg-apikey" placeholder="$2a$10$...">
-      <div class="hint">JSONBin.io のマスターキーを入力してください</div>
+      <label>Bin ID <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="cfg-binid" placeholder="64abcd1234567890abcdef12">
+      <div class="hint">JSONBin の Bin ID（空欄の場合は保存時に自動作成）</div>
     </div>
     <div class="field">
-      <label>Bin ID</label>
-      <input type="text" id="cfg-binid" placeholder="64abcd1234567890abcdef12">
-      <div class="hint">既存の Bin ID、または空欄で初回保存時に自動作成</div>
+      <label>API Key (X-Master-Key)　<span style="font-weight:400;color:var(--text-muted)">— 編集者のみ入力</span></label>
+      <input type="password" id="cfg-apikey" placeholder="$2a$10$... （閲覧のみなら空欄でOK）">
+      <div class="hint">入力すると書き込み可能になります。閲覧だけなら空欄でも読み込めます（Binが公開設定の場合）</div>
     </div>
     <div class="field">
       <label>履歴保持件数</label>
@@ -599,11 +610,12 @@ let deleteTargetId = null;
 // ─── Init ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
-  if (cfg.apiKey && cfg.binId) {
+  if (cfg.binId) {
     await loadFromBin();
   } else {
     openSettings();
   }
+  applyReadonlyMode();
   renderPageList();
 });
 
@@ -629,25 +641,42 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  cfg.apiKey  = document.getElementById('cfg-apikey').value.trim();
   cfg.binId   = document.getElementById('cfg-binid').value.trim();
+  cfg.apiKey  = document.getElementById('cfg-apikey').value.trim();
   cfg.histMax = parseInt(document.getElementById('cfg-histmax').value) || 20;
   localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
   closeSettings();
-  if (cfg.apiKey) {
+  applyReadonlyMode();
+  if (cfg.binId) {
     await loadFromBin();
     renderPageList();
   }
 }
 
+function isReadonly() { return !cfg.apiKey; }
+
+function applyReadonlyMode() {
+  const ro = isReadonly();
+  document.getElementById('readonly-badge').style.display = ro ? '' : 'none';
+  document.getElementById('new-page-btn').style.display   = ro ? 'none' : '';
+  document.getElementById('empty-new-btn').style.display  = ro ? 'none' : '';
+  const saveBtn = document.getElementById('save-btn');
+  if (saveBtn) saveBtn.style.display = ro ? 'none' : '';
+  // title input & editor: readonly when no key
+  const titleInput = document.getElementById('page-title-input');
+  const editor     = document.getElementById('editor');
+  if (titleInput) titleInput.readOnly = ro;
+  if (editor)     editor.readOnly     = ro;
+}
+
 // ─── JSONBin API ─────────────────────────────────────
 async function loadFromBin() {
-  if (!cfg.apiKey || !cfg.binId) return;
+  if (!cfg.binId) return;
   setStatus('読み込み中…', false);
   try {
-    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, {
-      headers: { 'X-Master-Key': cfg.apiKey }
-    });
+    const headers = {};
+    if (cfg.apiKey) headers['X-Master-Key'] = cfg.apiKey;
+    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     wikiData = json.record || { pages: [] };
@@ -718,7 +747,7 @@ function renderPageList(filter = '') {
     : pages.map(p => `
       <div class="page-item ${p.id === currentPageId ? 'active' : ''}" onclick="selectPage('${p.id}')">
         <span class="page-title-text">${escHtml(p.title)}</span>
-        <button class="page-del-btn" title="削除" onclick="event.stopPropagation();promptDelete('${p.id}')">🗑</button>
+        ${isReadonly() ? '' : `<button class="page-del-btn" title="削除" onclick="event.stopPropagation();promptDelete('${p.id}')">🗑</button>`}
       </div>
     `).join('');
 }
@@ -759,8 +788,9 @@ function selectPage(id) {
   document.getElementById('editor').value = page.content;
   setMode('edit');
   showEditor();
+  applyReadonlyMode();
   dirty = false;
-  setStatus('変更なし');
+  setStatus(isReadonly() ? '閲覧専用' : '変更なし');
   renderPageList();
   closeSidebar();
 }
