@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wiki</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f5f5;
+    --surface: #ffffff;
+    --border: #e0e0e0;
+    --primary: #1a73e8;
+    --primary-hover: #1558b0;
+    --danger: #d93025;
+    --text: #202124;
+    --text-muted: #5f6368;
+    --sidebar-width: 240px;
+    --header-height: 52px;
+  }
+
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── Header ─── */
+  #header {
+    height: var(--header-height);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  #header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #menu-btn {
+    display: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .btn {
+    padding: 7px 14px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-primary:disabled { background: #aaa; cursor: not-allowed; }
+
+  .btn-outline {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-outline:hover { background: var(--bg); }
+
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: #b22a1f; }
+
+  .btn-icon {
+    padding: 6px 8px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .btn-icon:hover { background: var(--bg); }
+
+  /* ─── Main layout ─── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ─── Sidebar ─── */
+  #sidebar {
+    width: var(--sidebar-width);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: transform 0.25s;
+  }
+
+  #sidebar-header {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  #search-box {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    background: var(--bg);
+    color: var(--text);
+  }
+  #search-box:focus { border-color: var(--primary); }
+
+  #page-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .page-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    border-left: 3px solid transparent;
+    gap: 6px;
+    color: var(--text);
+    text-decoration: none;
+    position: relative;
+  }
+
+  .page-item:hover { background: var(--bg); }
+
+  .page-item.active {
+    border-left-color: var(--primary);
+    background: #e8f0fe;
+    color: var(--primary);
+    font-weight: 500;
+  }
+
+  .page-title-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-del-btn {
+    opacity: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--danger);
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+
+  .page-item:hover .page-del-btn { opacity: 1; }
+
+  /* ─── Content area ─── */
+  #content-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  #page-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  #page-title-input {
+    flex: 1;
+    font-size: 18px;
+    font-weight: 600;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    min-width: 0;
+  }
+
+  #page-title-input::placeholder { color: var(--text-muted); }
+
+  #mode-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .mode-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+
+  .mode-btn.active { background: var(--primary); color: #fff; }
+
+  #editor-container {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #editor {
+    flex: 1;
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    font-size: 15px;
+    line-height: 1.7;
+    padding: 16px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface);
+    overflow-y: auto;
+  }
+
+  #preview {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: none;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* Preview styling */
+  #preview h1, #preview h2, #preview h3 {
+    margin: 16px 0 8px;
+    font-weight: 600;
+  }
+  #preview h1 { font-size: 22px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  #preview h2 { font-size: 18px; }
+  #preview h3 { font-size: 15px; }
+  #preview p { margin: 8px 0; }
+  #preview ul, #preview ol { margin: 8px 0 8px 20px; }
+  #preview li { margin: 3px 0; }
+  #preview a { color: var(--primary); }
+  #preview code {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  #preview pre {
+    background: var(--bg);
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  #preview pre code { padding: 0; background: none; }
+  #preview blockquote {
+    border-left: 3px solid var(--border);
+    margin: 8px 0;
+    padding: 4px 12px;
+    color: var(--text-muted);
+  }
+  #preview hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+  .tweet-embed {
+    margin: 12px 0;
+    max-width: 550px;
+  }
+
+  /* ─── Bottom bar ─── */
+  #bottom-bar {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border);
+    gap: 8px;
+    flex-shrink: 0;
+    background: var(--surface);
+  }
+
+  #status-msg {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  #history-btn {
+    font-size: 12px;
+    padding: 5px 10px;
+  }
+
+  /* ─── Empty state ─── */
+  #empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+  }
+
+  #empty-state .icon { font-size: 48px; }
+  #empty-state p { font-size: 15px; }
+
+  /* ─── Modal ─── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 20px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+
+  .modal h2 { font-size: 16px; margin-bottom: 14px; }
+
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+  .field input, .field textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    color: var(--text);
+    background: var(--surface);
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--primary); }
+  .field textarea { min-height: 80px; resize: vertical; font-family: monospace; }
+  .field .hint { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 16px;
+  }
+
+  /* History list */
+  #history-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .history-item:last-child { border-bottom: none; }
+  .history-item:hover { background: var(--bg); }
+  .history-meta { color: var(--text-muted); font-size: 11px; }
+  .history-preview {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── Responsive ─── */
+  @media (max-width: 640px) {
+    #menu-btn { display: block; }
+
+    #sidebar {
+      position: fixed;
+      left: 0;
+      top: var(--header-height);
+      bottom: 0;
+      z-index: 50;
+      transform: translateX(-100%);
+      box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+    }
+
+    #sidebar.open {
+      transform: translateX(0);
+    }
+
+    #sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      top: var(--header-height);
+      background: rgba(0,0,0,0.3);
+      z-index: 49;
+    }
+
+    #sidebar-overlay.open { display: block; }
+
+    #page-header { flex-wrap: wrap; }
+    #mode-toggle { order: 3; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header id="header">
+  <button id="menu-btn" title="メニュー" onclick="toggleSidebar()">☰</button>
+  <h1>📝 Wiki</h1>
+  <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
+</header>
+
+<!-- Sidebar overlay (mobile) -->
+<div id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+<div id="main">
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <input id="search-box" type="search" placeholder="ページを検索…" oninput="filterPages(this.value)">
+      <button class="btn-icon" title="新規ページ" onclick="newPage()">＋</button>
+    </div>
+    <div id="page-list"></div>
+  </nav>
+
+  <!-- Content area -->
+  <div id="content-area">
+    <div id="empty-state">
+      <div class="icon">📄</div>
+      <p>ページを選択するか、新規作成してください</p>
+      <button class="btn btn-primary" onclick="newPage()">＋ 新規ページ</button>
+    </div>
+
+    <div id="editor-wrapper" style="display:none; flex:1; flex-direction:column; overflow:hidden; display:none;">
+      <div id="page-header">
+        <input id="page-title-input" type="text" placeholder="ページタイトル" oninput="markDirty()">
+        <div id="mode-toggle">
+          <button class="mode-btn active" id="edit-mode-btn" onclick="setMode('edit')">編集</button>
+          <button class="mode-btn" id="preview-mode-btn" onclick="setMode('preview')">プレビュー</button>
+        </div>
+      </div>
+      <div id="editor-container">
+        <textarea id="editor" placeholder="ここに内容を入力… (Markdown対応)&#10;&#10;ヒント: XのツイートURLを1行に貼り付けると埋め込み表示されます" oninput="markDirty()"></textarea>
+        <div id="preview"></div>
+      </div>
+      <div id="bottom-bar">
+        <span id="status-msg">変更なし</span>
+        <button class="btn btn-outline history-btn" id="history-btn" onclick="openHistory()">📋 履歴</button>
+        <button class="btn btn-primary" id="save-btn" onclick="savePage()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <h2>⚙ 設定</h2>
+    <div class="field">
+      <label>JSONBin API Key (X-Master-Key)</label>
+      <input type="password" id="cfg-apikey" placeholder="$2a$10$...">
+      <div class="hint">JSONBin.io のマスターキーを入力してください</div>
+    </div>
+    <div class="field">
+      <label>Bin ID</label>
+      <input type="text" id="cfg-binid" placeholder="64abcd1234567890abcdef12">
+      <div class="hint">既存の Bin ID、または空欄で初回保存時に自動作成</div>
+    </div>
+    <div class="field">
+      <label>履歴保持件数</label>
+      <input type="number" id="cfg-histmax" min="5" max="100" value="20">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeSettings()">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Page Modal -->
+<div class="modal-overlay" id="new-page-modal">
+  <div class="modal">
+    <h2>📄 新規ページ</h2>
+    <div class="field">
+      <label>ページタイトル</label>
+      <input type="text" id="new-page-title" placeholder="タイトルを入力" onkeydown="if(event.key==='Enter')createPage()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeNewPage()">キャンセル</button>
+      <button class="btn btn-primary" onclick="createPage()">作成</button>
+    </div>
+  </div>
+</div>
+
+<!-- History Modal -->
+<div class="modal-overlay" id="history-modal">
+  <div class="modal">
+    <h2>📋 編集履歴</h2>
+    <div id="history-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeHistory()">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div class="modal-overlay" id="delete-modal">
+  <div class="modal">
+    <h2>🗑 ページを削除</h2>
+    <p id="delete-msg" style="font-size:14px;margin-bottom:16px;"></p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeDeleteModal()">キャンセル</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">削除</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────
+const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
+let cfg = { apiKey: '', binId: '', histMax: 20 };
+let wikiData = { pages: [] };  // { pages: [{id, title, content, history:[{ts,content}]}] }
+let currentPageId = null;
+let dirty = false;
+let deleteTargetId = null;
+
+// ─── Init ────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  loadConfig();
+  if (cfg.apiKey && cfg.binId) {
+    await loadFromBin();
+  } else {
+    openSettings();
+  }
+  renderPageList();
+});
+
+// ─── Config ──────────────────────────────────────────
+function loadConfig() {
+  try {
+    const s = JSON.parse(localStorage.getItem('wiki_cfg') || '{}');
+    cfg.apiKey  = s.apiKey  || '';
+    cfg.binId   = s.binId   || '';
+    cfg.histMax = s.histMax || 20;
+  } catch {}
+}
+
+function openSettings() {
+  document.getElementById('cfg-apikey').value = cfg.apiKey;
+  document.getElementById('cfg-binid').value  = cfg.binId;
+  document.getElementById('cfg-histmax').value = cfg.histMax;
+  document.getElementById('settings-modal').classList.add('open');
+}
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('open');
+}
+
+async function saveSettings() {
+  cfg.apiKey  = document.getElementById('cfg-apikey').value.trim();
+  cfg.binId   = document.getElementById('cfg-binid').value.trim();
+  cfg.histMax = parseInt(document.getElementById('cfg-histmax').value) || 20;
+  localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
+  closeSettings();
+  if (cfg.apiKey) {
+    await loadFromBin();
+    renderPageList();
+  }
+}
+
+// ─── JSONBin API ─────────────────────────────────────
+async function loadFromBin() {
+  if (!cfg.apiKey || !cfg.binId) return;
+  setStatus('読み込み中…', false);
+  try {
+    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, {
+      headers: { 'X-Master-Key': cfg.apiKey }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    wikiData = json.record || { pages: [] };
+    if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
+    setStatus('読み込み完了', false);
+  } catch (e) {
+    setStatus('読み込み失敗: ' + e.message, true);
+  }
+}
+
+async function saveToBin() {
+  if (!cfg.apiKey) { alert('API Keyを設定してください'); openSettings(); return false; }
+  const saveBtn = document.getElementById('save-btn');
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
+
+  try {
+    if (!cfg.binId) {
+      // Create new bin
+      const res = await fetch(`${JSONBIN_BASE}/b`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': cfg.apiKey,
+          'X-Bin-Name': 'wiki',
+          'X-Bin-Private': 'true'
+        },
+        body: JSON.stringify(wikiData)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      cfg.binId = j.metadata.id;
+      localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
+      setStatus(`Bin作成: ${cfg.binId}`, false);
+    } else {
+      const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': cfg.apiKey
+        },
+        body: JSON.stringify(wikiData)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+    dirty = false;
+    setStatus('保存済み — ' + new Date().toLocaleTimeString('ja-JP'));
+    return true;
+  } catch (e) {
+    setStatus('保存失敗: ' + e.message, true);
+    return false;
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存';
+  }
+}
+
+// ─── Page list ───────────────────────────────────────
+function renderPageList(filter = '') {
+  const list = document.getElementById('page-list');
+  const q = filter.toLowerCase();
+  const pages = wikiData.pages.filter(p =>
+    !q || p.title.toLowerCase().includes(q)
+  );
+
+  list.innerHTML = pages.length === 0
+    ? `<div style="padding:12px;font-size:13px;color:var(--text-muted);text-align:center">${filter ? '一致なし' : 'ページなし'}</div>`
+    : pages.map(p => `
+      <div class="page-item ${p.id === currentPageId ? 'active' : ''}" onclick="selectPage('${p.id}')">
+        <span class="page-title-text">${escHtml(p.title)}</span>
+        <button class="page-del-btn" title="削除" onclick="event.stopPropagation();promptDelete('${p.id}')">🗑</button>
+      </div>
+    `).join('');
+}
+
+function filterPages(q) { renderPageList(q); }
+
+// ─── Page CRUD ───────────────────────────────────────
+function newPage() {
+  document.getElementById('new-page-title').value = '';
+  document.getElementById('new-page-modal').classList.add('open');
+  setTimeout(() => document.getElementById('new-page-title').focus(), 50);
+  closeSidebar();
+}
+
+function closeNewPage() {
+  document.getElementById('new-page-modal').classList.remove('open');
+}
+
+function createPage() {
+  const title = document.getElementById('new-page-title').value.trim();
+  if (!title) return;
+  const page = { id: uid(), title, content: '', history: [] };
+  wikiData.pages.push(page);
+  closeNewPage();
+  renderPageList();
+  selectPage(page.id);
+}
+
+function selectPage(id) {
+  if (dirty && currentPageId) {
+    if (!confirm('未保存の変更があります。破棄しますか？')) return;
+  }
+  currentPageId = id;
+  const page = getPage(id);
+  if (!page) return;
+
+  document.getElementById('page-title-input').value = page.title;
+  document.getElementById('editor').value = page.content;
+  setMode('edit');
+  showEditor();
+  dirty = false;
+  setStatus('変更なし');
+  renderPageList();
+  closeSidebar();
+}
+
+function getPage(id) { return wikiData.pages.find(p => p.id === id); }
+
+async function savePage() {
+  if (!currentPageId) return;
+  const page = getPage(currentPageId);
+  if (!page) return;
+
+  const newTitle   = document.getElementById('page-title-input').value.trim() || '無題';
+  const newContent = document.getElementById('editor').value;
+
+  // Push to history before overwriting
+  if (page.content !== newContent || page.title !== newTitle) {
+    page.history = page.history || [];
+    page.history.unshift({ ts: Date.now(), title: page.title, content: page.content });
+    if (page.history.length > cfg.histMax) page.history.length = cfg.histMax;
+  }
+
+  page.title   = newTitle;
+  page.content = newContent;
+  renderPageList();
+
+  await saveToBin();
+}
+
+// ─── Delete ──────────────────────────────────────────
+function promptDelete(id) {
+  const page = getPage(id);
+  if (!page) return;
+  deleteTargetId = id;
+  document.getElementById('delete-msg').textContent = `「${page.title}」を削除しますか？この操作は元に戻せません。`;
+  document.getElementById('delete-modal').classList.add('open');
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.remove('open');
+  deleteTargetId = null;
+}
+
+async function confirmDelete() {
+  if (!deleteTargetId) return;
+  wikiData.pages = wikiData.pages.filter(p => p.id !== deleteTargetId);
+  if (currentPageId === deleteTargetId) {
+    currentPageId = null;
+    dirty = false;
+    showEmpty();
+  }
+  closeDeleteModal();
+  renderPageList();
+  await saveToBin();
+}
+
+// ─── History ─────────────────────────────────────────
+function openHistory() {
+  const page = getPage(currentPageId);
+  const list = document.getElementById('history-list');
+  const history = page?.history || [];
+
+  if (history.length === 0) {
+    list.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted);text-align:center">履歴なし</div>';
+  } else {
+    list.innerHTML = history.map((h, i) => `
+      <div class="history-item" onclick="restoreHistory(${i})" title="クリックで復元">
+        <div>
+          <div style="font-size:13px;font-weight:500">${escHtml(h.title || '無題')}</div>
+          <div class="history-meta">${new Date(h.ts).toLocaleString('ja-JP')}</div>
+        </div>
+        <div class="history-preview">${escHtml((h.content || '').slice(0, 60))}</div>
+      </div>
+    `).join('');
+  }
+
+  document.getElementById('history-modal').classList.add('open');
+}
+
+function closeHistory() {
+  document.getElementById('history-modal').classList.remove('open');
+}
+
+function restoreHistory(index) {
+  const page = getPage(currentPageId);
+  if (!page) return;
+  const h = page.history[index];
+  if (!h) return;
+  if (!confirm(`${new Date(h.ts).toLocaleString('ja-JP')} の内容に復元しますか？`)) return;
+  document.getElementById('page-title-input').value = h.title || '';
+  document.getElementById('editor').value = h.content || '';
+  markDirty();
+  closeHistory();
+}
+
+// ─── Editor / Preview ────────────────────────────────
+let currentMode = 'edit';
+
+function setMode(mode) {
+  currentMode = mode;
+  const editor  = document.getElementById('editor');
+  const preview = document.getElementById('preview');
+  const editBtn = document.getElementById('edit-mode-btn');
+  const prevBtn = document.getElementById('preview-mode-btn');
+
+  if (mode === 'edit') {
+    editor.style.display  = 'block';
+    preview.style.display = 'none';
+    editBtn.classList.add('active');
+    prevBtn.classList.remove('active');
+  } else {
+    editor.style.display  = 'none';
+    preview.style.display = 'block';
+    editBtn.classList.remove('active');
+    prevBtn.classList.add('active');
+    renderPreview();
+  }
+}
+
+function renderPreview() {
+  const raw = document.getElementById('editor').value;
+  const html = markdownToHtml(raw);
+  const preview = document.getElementById('preview');
+  preview.innerHTML = html;
+  // Load tweet embeds
+  embedTweets(preview);
+}
+
+// ─── Markdown parser (lightweight) ───────────────────
+function markdownToHtml(md) {
+  const lines = md.split('\n');
+  let html = '';
+  let inCode = false, codeLang = '', codeLines = [];
+  let inUl = false, inOl = false;
+
+  const flushList = () => {
+    if (inUl) { html += '</ul>'; inUl = false; }
+    if (inOl) { html += '</ol>'; inOl = false; }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Fenced code blocks
+    if (line.startsWith('```')) {
+      if (!inCode) {
+        flushList();
+        inCode = true;
+        codeLang = line.slice(3).trim();
+        codeLines = [];
+      } else {
+        html += `<pre><code>${escHtml(codeLines.join('\n'))}</code></pre>`;
+        inCode = false;
+      }
+      continue;
+    }
+
+    if (inCode) { codeLines.push(line); continue; }
+
+    // Tweet URL (line contains only an X/Twitter URL)
+    if (/^https?:\/\/(twitter\.com|x\.com)\/\S+\/status\/\d+/.test(line.trim())) {
+      flushList();
+      html += `<div class="tweet-embed" data-tweet-url="${escHtml(line.trim())}"></div>`;
+      continue;
+    }
+
+    // Headings
+    const hm = line.match(/^(#{1,3})\s+(.*)/);
+    if (hm) { flushList(); html += `<h${hm[1].length}>${inlineMarkdown(hm[2])}</h${hm[1].length}>`; continue; }
+
+    // HR
+    if (/^[-*]{3,}$/.test(line.trim())) { flushList(); html += '<hr>'; continue; }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      flushList();
+      html += `<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`;
+      continue;
+    }
+
+    // Unordered list
+    const ulm = line.match(/^[-*+]\s+(.*)/);
+    if (ulm) {
+      if (inOl) { html += '</ol>'; inOl = false; }
+      if (!inUl) { html += '<ul>'; inUl = true; }
+      html += `<li>${inlineMarkdown(ulm[1])}</li>`;
+      continue;
+    }
+
+    // Ordered list
+    const olm = line.match(/^\d+\.\s+(.*)/);
+    if (olm) {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (!inOl) { html += '<ol>'; inOl = true; }
+      html += `<li>${inlineMarkdown(olm[1])}</li>`;
+      continue;
+    }
+
+    flushList();
+
+    // Empty line → paragraph break
+    if (!line.trim()) { html += '<p></p>'; continue; }
+
+    html += `<p>${inlineMarkdown(line)}</p>`;
+  }
+
+  flushList();
+  if (inCode) html += `<pre><code>${escHtml(codeLines.join('\n'))}</code></pre>`;
+
+  return html;
+}
+
+function inlineMarkdown(text) {
+  return text
+    // Bold+Italic
+    .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    // Bold
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // Italic
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Strikethrough
+    .replace(/~~(.*?)~~/g, '<del>$1</del>')
+    // Link
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    // Auto-link (not inside href)
+    .replace(/(?<![="'])https?:\/\/[^\s<>"']+/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+}
+
+// ─── Tweet embedding ─────────────────────────────────
+function embedTweets(container) {
+  const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
+  if (divs.length === 0) return;
+
+  const loadScript = () => {
+    if (!window.twttr) {
+      const s = document.createElement('script');
+      s.src = 'https://platform.twitter.com/widgets.js';
+      s.async = true;
+      document.head.appendChild(s);
+    }
+  };
+
+  divs.forEach(div => {
+    const url = div.dataset.tweetUrl;
+    div.removeAttribute('data-tweet-url');
+    const a = document.createElement('a');
+    a.href = url;
+    a.className = 'twitter-tweet';
+    a.setAttribute('data-lang', 'ja');
+    a.textContent = url;
+    div.appendChild(a);
+  });
+
+  loadScript();
+
+  // Poll until twttr is ready then load widgets
+  let tries = 0;
+  const tryLoad = () => {
+    if (window.twttr && window.twttr.widgets) {
+      window.twttr.widgets.load(container);
+    } else if (tries++ < 20) {
+      setTimeout(tryLoad, 300);
+    }
+  };
+  tryLoad();
+}
+
+// ─── UI helpers ──────────────────────────────────────
+function showEditor() {
+  document.getElementById('empty-state').style.display = 'none';
+  const w = document.getElementById('editor-wrapper');
+  w.style.display = 'flex';
+  w.style.flexDirection = 'column';
+  w.style.flex = '1';
+  w.style.overflow = 'hidden';
+}
+
+function showEmpty() {
+  document.getElementById('empty-state').style.display = '';
+  document.getElementById('editor-wrapper').style.display = 'none';
+}
+
+function markDirty() {
+  dirty = true;
+  setStatus('未保存の変更あり ●');
+}
+
+function setStatus(msg, isError = false) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+}
+
+// Mobile sidebar
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
+// ─── Utilities ───────────────────────────────────────
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Keyboard shortcut: Ctrl+S / Cmd+S to save
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    if (currentPageId) savePage();
+  }
+});
+</script>
+</body>
+</html>
