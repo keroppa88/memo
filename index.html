@@ -514,7 +514,7 @@
       <button class="btn btn-primary" id="empty-new-btn" onclick="newPage()">＋ 新規ページ</button>
     </div>
 
-    <div id="editor-wrapper" style="display:none; flex:1; flex-direction:column; overflow:hidden; display:none;">
+    <div id="editor-wrapper" style="display:none; flex:1; flex-direction:column; overflow:hidden;">
       <div id="page-header">
         <input id="page-title-input" type="text" placeholder="ページタイトル" oninput="markDirty()">
         <div id="mode-toggle">
@@ -617,8 +617,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
   // URLパラメータから bin と key を取得（閲覧者はリンクを開くだけでOK）
   const params = new URLSearchParams(location.search);
-  if (params.get('bin')) cfg.binId = params.get('bin');
-  if (params.get('key')) readKey = params.get('key'); // 読み取り専用キー（書き込みには使わない）
+  const urlBin = params.get('bin'), urlKey = params.get('key');
+  if (urlBin) cfg.binId = urlBin;
+  if (urlKey) readKey = urlKey; // 読み取り専用キー（書き込みには使わない）
 
   if (cfg.binId) {
     await loadFromBin();
@@ -859,7 +860,7 @@ function selectPage(id) {
 
   document.getElementById('page-title-input').value = page.title;
   document.getElementById('editor').value = page.content;
-  setMode('edit');
+  setMode(isReadonly() ? 'preview' : 'edit');
   showEditor();
   applyReadonlyMode();
   dirty = false;
