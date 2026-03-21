@@ -1099,15 +1099,15 @@ function embedTweets(container) {
   const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
   if (divs.length === 0) return;
 
-  const processDivs = () => {
-    divs.forEach(div => {
+  const processDivs = async () => {
+    for (const div of divs) {
       const url = div.dataset.tweetUrl;
-      if (!url) return;
+      if (!url) continue;
       div.removeAttribute('data-tweet-url');
       const m = url.match(/\/status\/(\d+)/);
-      if (!m) return;
-      window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
-    });
+      if (!m) continue;
+      await window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
+    }
   };
 
   if (!window.twttr) {
