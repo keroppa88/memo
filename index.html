@@ -746,13 +746,24 @@ async function pollUpdate() {
 }
 
 // ─── JSONBin API ─────────────────────────────────────
+function throwApiError(status) {
+  const msgs = {
+    403: 'APIキーを確認してください (403)',
+    429: 'リクエスト過多 (429)',
+    430: 'リクエスト過多 (430)',
+  };
+  const err = new Error(msgs[status] || `HTTP ${status}`);
+  err.status = status;
+  throw err;
+}
+
 async function fetchWithRetry(url, options, maxRetries = 4) {
   let delay = 2000;
   for (let i = 0; i <= maxRetries; i++) {
     const res = await fetch(url, options);
-    if (res.status !== 429 && res.status !== 430) return res;
+    if (res.status !== 403 && res.status !== 429 && res.status !== 430) return res;
     if (i === maxRetries) return res;
-    setStatus(`レート制限 — ${delay / 1000}秒後に再試行…`, true);
+    setStatus(`一時的なエラー (${res.status}) — ${delay / 1000}秒後に再試行…`, true);
     await new Promise(r => setTimeout(r, delay));
     delay *= 2;
   }
@@ -792,7 +803,7 @@ async function saveToBin() {
         },
         body: JSON.stringify(wikiData)
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throwApiError(res.status);
       const j = await res.json();
       cfg.binId = j.metadata.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
@@ -806,13 +817,14 @@ async function saveToBin() {
         },
         body: JSON.stringify(wikiData)
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throwApiError(res.status);
     }
     dirty = false;
     setStatus('保存済み — ' + new Date().toLocaleTimeString('ja-JP'));
     return true;
   } catch (e) {
     setStatus('保存失敗: ' + e.message, true);
+    if (e.status === 403) openSettings();
     return false;
   } finally {
     saveBtn.disabled = false;
