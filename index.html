@@ -761,9 +761,9 @@ async function fetchWithRetry(url, options, maxRetries = 4) {
   let delay = 2000;
   for (let i = 0; i <= maxRetries; i++) {
     const res = await fetch(url, options);
-    if (res.status !== 429 && res.status !== 430) return res;
+    if (res.status !== 403 && res.status !== 429 && res.status !== 430) return res;
     if (i === maxRetries) return res;
-    setStatus(`レート制限 — ${delay / 1000}秒後に再試行…`, true);
+    setStatus(`一時的なエラー (${res.status}) — ${delay / 1000}秒後に再試行…`, true);
     await new Promise(r => setTimeout(r, delay));
     delay *= 2;
   }
