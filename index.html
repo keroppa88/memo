@@ -1191,7 +1191,7 @@ function embedTweets(container) {
       if (!m) continue;
       const el = await Promise.race([
         window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' }).catch(() => null),
-        new Promise(r => setTimeout(() => r(null), 8000))
+        new Promise(r => setTimeout(() => r(null), 3000))
       ]);
       if (!el) div.innerHTML = '';
     }
