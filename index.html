@@ -747,8 +747,9 @@ async function pollUpdate() {
     const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) return;
     const json = await res.json();
-    const fresh = parseGistData(gistContent(json));
-    if (!Array.isArray(fresh.pages)) fresh.pages = [];
+    const raw = await gistContent(json?.files?.[GIST_FILE]);
+    const fresh = parseGistData(raw);
+    if (!fresh || !Array.isArray(fresh.pages)) return;
 
     // 変化がなければ何もしない
     if (JSON.stringify(fresh) === JSON.stringify(wikiData)) return;
@@ -786,15 +787,25 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
   }
 }
 
-function gistContent(record) {
-  return record?.files?.[GIST_FILE]?.content ?? null;
+async function gistContent(fileObj) {
+  if (!fileObj) return null;
+  if (fileObj.truncated && fileObj.raw_url) {
+    const r = await fetch(fileObj.raw_url, { cache: 'no-store' });
+    if (r.ok) return r.text();
+  }
+  return fileObj.content ?? null;
 }
 
 function parseGistData(content) {
-  if (!content) return { pages: [] };
-  try { return JSON.parse(LZString.decompressFromBase64(content)) || { pages: [] }; } catch {}
-  try { return JSON.parse(content); } catch {}  // 旧フォーマット fallback
-  return { pages: [] };
+  if (!content) return null;
+  // LZString 圧縮フォーマット
+  try {
+    const s = LZString.decompressFromBase64(content);
+    if (s) return JSON.parse(s);
+  } catch {}
+  // 生 JSON フォーマット fallback
+  try { return JSON.parse(content); } catch {}
+  return null;
 }
 
 async function loadFromBin() {
@@ -804,7 +815,10 @@ async function loadFromBin() {
     const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    wikiData = parseGistData(gistContent(json));
+    const raw = await gistContent(json?.files?.[GIST_FILE]);
+    const data = parseGistData(raw);
+    if (!data) throw new Error(`データの解析に失敗しました (Gist ID: ${cfg.binId})`);
+    wikiData = data;
     if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
     setStatus('読み込み完了', false);
   } catch (e) {
