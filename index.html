@@ -557,6 +557,7 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeSettings()">キャンセル</button>
+      <button class="btn btn-outline" onclick="testApiKey()" id="test-api-btn">APIテスト</button>
       <button class="btn btn-primary" onclick="saveSettings()">保存</button>
     </div>
   </div>
@@ -648,6 +649,31 @@ function openSettings() {
   document.getElementById('cfg-binid').value  = cfg.binId;
   document.getElementById('cfg-histmax').value = cfg.histMax;
   document.getElementById('settings-modal').classList.add('open');
+}
+
+async function testApiKey() {
+  const key = document.getElementById('cfg-apikey').value.trim();
+  const binId = document.getElementById('cfg-binid').value.trim();
+  const btn = document.getElementById('test-api-btn');
+  if (!key) { alert('API Keyを入力してください'); return; }
+  btn.disabled = true;
+  btn.textContent = 'テスト中…';
+  try {
+    // Test read
+    const url = binId ? `${JSONBIN_BASE}/b/${binId}/latest` : `${JSONBIN_BASE}/b`;
+    const method = binId ? 'GET' : 'POST';
+    const opts = binId
+      ? { headers: { 'X-Master-Key': key, 'Cache-Control': 'no-cache' } }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Master-Key': key, 'X-Bin-Name': 'test' }, body: '{}' };
+    const res = await fetch(binId ? `${JSONBIN_BASE}/b/${binId}/latest` : `${JSONBIN_BASE}/b`, opts);
+    const body = await res.json().catch(() => null);
+    alert(`ステータス: ${res.status}\nレスポンス: ${JSON.stringify(body)}`);
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'APIテスト';
+  }
 }
 
 function closeSettings() {
