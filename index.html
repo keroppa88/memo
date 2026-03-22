@@ -1156,6 +1156,11 @@ function markdownToHtml(md) {
 
 function inlineMarkdown(text) {
   return text
+    // Background colors: ///g text/// ///b text/// ///r text/// ///y text///
+    .replace(/\/\/\/g\s(.*?)\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
+    .replace(/\/\/\/b\s(.*?)\/\/\//g, '<span style="background-color:#87ceeb">$1</span>')
+    .replace(/\/\/\/r\s(.*?)\/\/\//g, '<span style="background-color:#ff9999">$1</span>')
+    .replace(/\/\/\/y\s(.*?)\/\/\//g, '<span style="background-color:#ffff66">$1</span>')
     // Bold+Italic
     .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
     // Bold
