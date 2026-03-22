@@ -601,7 +601,8 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+<!-- lz-string は旧データ読み込み用にのみ残す。新規保存は plain JSON -->
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js" onerror="console.warn('LZString CDN load failed; old compressed data cannot be decoded')"></script>
 <script>
 // ─── State ───────────────────────────────────────────
 const GIST_API = 'https://api.github.com/gists';
@@ -798,13 +799,15 @@ async function gistContent(fileObj) {
 
 function parseGistData(content) {
   if (!content) return null;
-  // LZString 圧縮フォーマット
-  try {
-    const s = LZString.decompressFromBase64(content);
-    if (s) return JSON.parse(s);
-  } catch {}
-  // 生 JSON フォーマット fallback
+  // plain JSON（新フォーマット）
   try { return JSON.parse(content); } catch {}
+  // LZString 圧縮（旧フォーマット fallback）
+  try {
+    if (typeof LZString !== 'undefined') {
+      const s = LZString.decompressFromBase64(content);
+      if (s) return JSON.parse(s);
+    }
+  } catch {}
   return null;
 }
 
@@ -832,7 +835,7 @@ async function saveToBin() {
   saveBtn.disabled = true;
   saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
 
-  const content = LZString.compressToBase64(JSON.stringify(wikiData));
+  const content = JSON.stringify(wikiData);
   const files = { [GIST_FILE]: { content } };
 
   try {
