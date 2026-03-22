@@ -841,6 +841,12 @@ async function saveToBin() {
         headers: writeHeaders(),
         body: JSON.stringify({ files })
       });
+      if (res.status === 404) {
+        // Gist が存在しない（旧 JSONBin ID 等）→ 新規作成にフォールバック
+        cfg.binId = '';
+        localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
+        return saveToBin();
+      }
       if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message || `HTTP ${res.status}`); }
     }
     dirty = false;
