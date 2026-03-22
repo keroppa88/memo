@@ -1182,24 +1182,22 @@ function embedTweets(container) {
   const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
   if (divs.length === 0) return;
 
-  const processDivs = () => {
-    const tasks = Array.from(divs).map(div => {
+  const processDivs = async () => {
+    for (const div of divs) {
       const url = div.dataset.tweetUrl;
-      if (!url) return Promise.resolve();
+      if (!url) continue;
       div.removeAttribute('data-tweet-url');
       const m = url.match(/\/status\/(\d+)/);
-      if (!m) return Promise.resolve();
-      return window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' })
-        .then(el => {
-          if (!el) {
-            div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;">🐦 ツイートが見つかりません: <a href="${url}" target="_blank" rel="noopener">${url}</a></span>`;
-          }
-        })
-        .catch(() => {
-          div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;">🐦 ツイートが見つかりません: <a href="${url}" target="_blank" rel="noopener">${url}</a></span>`;
-        });
-    });
-    return Promise.allSettled(tasks);
+      if (!m) continue;
+      try {
+        const el = await window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
+        if (!el) {
+          div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;"><a href="${url}" target="_blank" rel="noopener">[削除済みツイート]</a></span>`;
+        }
+      } catch (e) {
+        div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;"><a href="${url}" target="_blank" rel="noopener">[削除済みツイート]</a></span>`;
+      }
+    }
   };
 
   if (!window.twttr) {
