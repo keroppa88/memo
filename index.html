@@ -649,7 +649,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const dataUrl = ev.target.result;
-          const inserted = `![image](${dataUrl})`;
+          const page = getPage(currentPageId);
+          if (!page) return;
+          if (!page.images) page.images = {};
+          // Generate next sequential image ID
+          const nums = Object.keys(page.images).map(k => parseInt(k.replace('img-', '')) || 0);
+          const nextId = `img-${(nums.length ? Math.max(...nums) : 0) + 1}`;
+          page.images[nextId] = dataUrl;
+          const inserted = `![image](img:${nextId})`;
           const start = editor.selectionStart;
           const end   = editor.selectionEnd;
           editor.value = editor.value.slice(0, start) + inserted + editor.value.slice(end);
@@ -948,7 +955,7 @@ function closeNewPage() {
 function createPage() {
   const title = document.getElementById('new-page-title').value.trim();
   if (!title) return;
-  const page = { id: uid(), title, content: '', history: [] };
+  const page = { id: uid(), title, content: '', history: [], images: {} };
   wikiData.pages.push(page);
   closeNewPage();
   renderPageList();
@@ -1090,7 +1097,8 @@ function setMode(mode) {
 
 function renderPreview() {
   const raw = document.getElementById('editor').value;
-  const html = markdownToHtml(raw);
+  const images = getPage(currentPageId)?.images || {};
+  const html = markdownToHtml(raw, images);
   const preview = document.getElementById('preview');
   preview.innerHTML = html;
   // Load tweet embeds
@@ -1098,7 +1106,7 @@ function renderPreview() {
 }
 
 // ─── Markdown parser (lightweight) ───────────────────
-function markdownToHtml(md) {
+function markdownToHtml(md, images = {}) {
   const lines = md.split('\n');
   let html = '';
   let inCode = false, codeLang = '', codeLines = [];
@@ -1137,7 +1145,7 @@ function markdownToHtml(md) {
 
     // Headings
     const hm = line.match(/^(#{1,3})\s+(.*)/);
-    if (hm) { flushList(); html += `<h${hm[1].length}>${inlineMarkdown(hm[2])}</h${hm[1].length}>`; continue; }
+    if (hm) { flushList(); html += `<h${hm[1].length}>${inlineMarkdown(hm[2], images)}</h${hm[1].length}>`; continue; }
 
     // HR
     if (/^[-*]{3,}$/.test(line.trim())) { flushList(); html += '<hr>'; continue; }
@@ -1145,7 +1153,7 @@ function markdownToHtml(md) {
     // Blockquote
     if (line.startsWith('> ')) {
       flushList();
-      html += `<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`;
+      html += `<blockquote>${inlineMarkdown(line.slice(2), images)}</blockquote>`;
       continue;
     }
 
@@ -1154,7 +1162,7 @@ function markdownToHtml(md) {
     if (ulm) {
       if (inOl) { html += '</ol>'; inOl = false; }
       if (!inUl) { html += '<ul>'; inUl = true; }
-      html += `<li>${inlineMarkdown(ulm[1])}</li>`;
+      html += `<li>${inlineMarkdown(ulm[1], images)}</li>`;
       continue;
     }
 
@@ -1163,7 +1171,7 @@ function markdownToHtml(md) {
     if (olm) {
       if (inUl) { html += '</ul>'; inUl = false; }
       if (!inOl) { html += '<ol>'; inOl = true; }
-      html += `<li>${inlineMarkdown(olm[1])}</li>`;
+      html += `<li>${inlineMarkdown(olm[1], images)}</li>`;
       continue;
     }
 
@@ -1172,7 +1180,7 @@ function markdownToHtml(md) {
     // Empty line → paragraph break
     if (!line.trim()) { html += '<p></p>'; continue; }
 
-    html += `<p>${inlineMarkdown(line)}</p>`;
+    html += `<p>${inlineMarkdown(line, images)}</p>`;
   }
 
   flushList();
@@ -1181,7 +1189,7 @@ function markdownToHtml(md) {
   return html;
 }
 
-function inlineMarkdown(text) {
+function inlineMarkdown(text, images = {}) {
   return text
     // Background colors: ///g text/// ///b text/// ///r text/// ///y text///
     .replace(/\/\/\/g\s*(.*?)\s*\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
@@ -1198,8 +1206,11 @@ function inlineMarkdown(text) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     // Strikethrough
     .replace(/~~(.*?)~~/g, '<del>$1</del>')
-    // Image (must come before link)
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
+    // Image (must come before link); resolve img:xxx refs from page.images store
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+      const resolvedSrc = src.startsWith('img:') ? (images[src.slice(4)] || '') : src;
+      return resolvedSrc ? `<img src="${resolvedSrc}" alt="${alt}">` : `<span style="color:var(--danger)">[画像なし: ${src}]</span>`;
+    })
     // Link
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     // Auto-link (not inside href)
