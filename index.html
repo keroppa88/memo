@@ -535,31 +535,6 @@
   </div>
 </div>
 
-<!-- Migration Modal -->
-<div class="modal-overlay" id="migration-modal">
-  <div class="modal">
-    <h2>📦 JSONBin → GitHub Gist 移行</h2>
-    <p style="margin-bottom:12px;">以前の <strong>JSONBin</strong> 設定が検出されました。<br>データを GitHub Gist に移行するか、リセットして新規スタートするかを選んでください。</p>
-    <div class="field">
-      <label>JSONBin API Key（旧）</label>
-      <input type="password" id="mig-jsonbin-key" placeholder="$2a$10$...">
-    </div>
-    <div class="field">
-      <label>JSONBin Bin ID（旧）</label>
-      <input type="text" id="mig-jsonbin-binid" placeholder="24文字の16進数">
-    </div>
-    <div class="field">
-      <label>GitHub Token（新・gist スコープ）</label>
-      <input type="password" id="mig-github-token" placeholder="ghp_xxxx">
-    </div>
-    <div id="mig-status" style="font-size:13px;margin-top:8px;"></div>
-    <div class="modal-actions" style="margin-top:16px;">
-      <button class="btn btn-primary" onclick="runMigration()">移行する</button>
-      <button class="btn btn-outline" onclick="skipMigration()">新規スタート（データなし）</button>
-    </div>
-  </div>
-</div>
-
 <!-- Settings Modal -->
 <div class="modal-overlay" id="settings-modal">
   <div class="modal">
@@ -648,12 +623,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const urlBin = params.get('gist') || params.get('bin');
   if (urlBin) cfg.binId = urlBin;
 
-  // JSONBin の旧設定を検出して移行ダイアログを表示
-  if (isJsonBinId(cfg.binId) || isJsonBinKey(cfg.apiKey)) {
-    showMigrationBanner();
-    return;
-  }
-
   if (cfg.binId) {
     await loadFromBin();
   } else if (cfg.apiKey) {
@@ -665,82 +634,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderPageList();
   startPollingIfReadonly();
 });
-
-// ─── Migration (JSONBin → Gist) ──────────────────────
-function isJsonBinKey(key) { return key && key.startsWith('$2a$'); }
-function isJsonBinId(id)  { return id  && /^[a-f0-9]{24}$/i.test(id); }
-
-function showMigrationBanner() {
-  const modal = document.getElementById('migration-modal');
-  document.getElementById('mig-jsonbin-key').value   = cfg.apiKey || '';
-  document.getElementById('mig-jsonbin-binid').value = cfg.binId  || '';
-  modal.classList.add('open');
-  // ページ描画
-  applyReadonlyMode();
-  renderPageList();
-}
-
-async function runMigration() {
-  const jsonbinKey  = document.getElementById('mig-jsonbin-key').value.trim();
-  const jsonbinBin  = document.getElementById('mig-jsonbin-binid').value.trim();
-  const githubToken = document.getElementById('mig-github-token').value.trim();
-  const status      = document.getElementById('mig-status');
-
-  if (!jsonbinBin) { status.textContent = '❌ JSONBin Bin ID を入力してください'; return; }
-  if (!githubToken) { status.textContent = '❌ GitHub Token を入力してください'; return; }
-
-  status.textContent = '⏳ JSONBin からデータを読み込み中…';
-  try {
-    const headers = { 'Cache-Control': 'no-cache' };
-    if (jsonbinKey) headers['X-Master-Key'] = jsonbinKey;
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${jsonbinBin}/latest`, { headers, cache: 'no-store' });
-    if (!res.ok) throw new Error(`JSONBin HTTP ${res.status} — APIキーや公開設定を確認してください`);
-    const json = await res.json();
-    let data = json.record || { pages: [] };
-    // LZString 圧縮されている場合は展開
-    if (data.d) { try { data = JSON.parse(LZString.decompressFromBase64(data.d)); } catch {} }
-    if (!Array.isArray(data.pages)) data.pages = [];
-
-    status.textContent = `✅ ${data.pages.length} ページ取得。GitHub Gist に保存中…`;
-    wikiData = data;
-
-    const content = LZString.compressToBase64(JSON.stringify(wikiData));
-    const gistRes = await fetch(GIST_API, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${githubToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: 'wiki data (migrated from JSONBin)', public: false, files: { [GIST_FILE]: { content } } })
-    });
-    if (!gistRes.ok) { const b = await gistRes.json().catch(()=>({})); throw new Error(b.message || `GitHub HTTP ${gistRes.status}`); }
-    const gist = await gistRes.json();
-
-    // 新設定を保存
-    cfg.apiKey = githubToken;
-    cfg.binId  = gist.id;
-    localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
-
-    status.textContent = `✅ 移行完了！Gist ID: ${gist.id}`;
-    setTimeout(() => {
-      document.getElementById('migration-modal').classList.remove('open');
-      applyReadonlyMode();
-      renderPageList();
-      if (wikiData.pages.length) openPage(wikiData.pages[0].id);
-      startPollingIfReadonly();
-    }, 1500);
-  } catch (e) {
-    status.textContent = '❌ ' + e.message;
-  }
-}
-
-function skipMigration() {
-  cfg.apiKey = '';
-  cfg.binId  = '';
-  localStorage.removeItem('wiki_cfg');
-  wikiData = { pages: [] };
-  document.getElementById('migration-modal').classList.remove('open');
-  applyReadonlyMode();
-  renderPageList();
-  openSettings();
-}
 
 // ─── Config ──────────────────────────────────────────
 
