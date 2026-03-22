@@ -1157,10 +1157,10 @@ function markdownToHtml(md) {
 function inlineMarkdown(text) {
   return text
     // Background colors: ///g text/// ///b text/// ///r text/// ///y text///
-    .replace(/\/\/\/g\s(.*?)\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
-    .replace(/\/\/\/b\s(.*?)\/\/\//g, '<span style="background-color:#87ceeb">$1</span>')
-    .replace(/\/\/\/r\s(.*?)\/\/\//g, '<span style="background-color:#ff9999">$1</span>')
-    .replace(/\/\/\/y\s(.*?)\/\/\//g, '<span style="background-color:#ffff66">$1</span>')
+    .replace(/\/\/\/g\s+(.*?)\s*\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
+    .replace(/\/\/\/b\s+(.*?)\s*\/\/\//g, '<span style="background-color:#87ceeb">$1</span>')
+    .replace(/\/\/\/r\s+(.*?)\s*\/\/\//g, '<span style="background-color:#ff9999">$1</span>')
+    .replace(/\/\/\/y\s+(.*?)\s*\/\/\//g, '<span style="background-color:#ffff66">$1</span>')
     // Bold+Italic
     .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
     // Bold
@@ -1182,22 +1182,24 @@ function embedTweets(container) {
   const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
   if (divs.length === 0) return;
 
-  const processDivs = async () => {
-    for (const div of divs) {
+  const processDivs = () => {
+    const tasks = Array.from(divs).map(div => {
       const url = div.dataset.tweetUrl;
-      if (!url) continue;
+      if (!url) return Promise.resolve();
       div.removeAttribute('data-tweet-url');
       const m = url.match(/\/status\/(\d+)/);
-      if (!m) continue;
-      try {
-        const el = await window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
-        if (!el) {
+      if (!m) return Promise.resolve();
+      return window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' })
+        .then(el => {
+          if (!el) {
+            div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;">🐦 ツイートが見つかりません: <a href="${url}" target="_blank" rel="noopener">${url}</a></span>`;
+          }
+        })
+        .catch(() => {
           div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;">🐦 ツイートが見つかりません: <a href="${url}" target="_blank" rel="noopener">${url}</a></span>`;
-        }
-      } catch (e) {
-        div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;">🐦 ツイートが見つかりません: <a href="${url}" target="_blank" rel="noopener">${url}</a></span>`;
-      }
-    }
+        });
+    });
+    return Promise.allSettled(tasks);
   };
 
   if (!window.twttr) {
