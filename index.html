@@ -729,7 +729,7 @@ function startPollingIfReadonly() {
 }
 
 function readHeaders() {
-  const h = { 'Accept': 'application/vnd.github+json', 'Cache-Control': 'no-cache' };
+  const h = { 'Accept': 'application/vnd.github+json' };
   if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
   return h;
 }
