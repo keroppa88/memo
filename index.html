@@ -1190,7 +1190,7 @@ function embedTweets(container) {
       const m = url.match(/\/status\/(\d+)/);
       if (!m) continue;
       const el = await Promise.race([
-        window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' }).catch(() => null),
+        Promise.resolve().then(() => window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' })).catch(() => null),
         new Promise(r => setTimeout(() => r(null), 8000))
       ]);
       if (!el) div.innerHTML = '';
