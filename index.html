@@ -792,7 +792,7 @@ async function saveToBin() {
         },
         body: JSON.stringify(wikiData)
       });
-      if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw Object.assign(new Error(JSON.stringify(b)||`HTTP ${res.status}`), { status: res.status }); }
       const j = await res.json();
       cfg.binId = j.metadata.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
@@ -802,11 +802,12 @@ async function saveToBin() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'X-Master-Key': cfg.apiKey
+          'X-Master-Key': cfg.apiKey,
+          'X-Bin-Versioning': 'false'
         },
         body: JSON.stringify(wikiData)
       });
-      if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw Object.assign(new Error(JSON.stringify(b)||`HTTP ${res.status}`), { status: res.status }); }
     }
     dirty = false;
     setStatus('保存済み — ' + new Date().toLocaleTimeString('ja-JP'));
