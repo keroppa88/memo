@@ -745,7 +745,7 @@ function writeHeaders() {
 async function pollUpdate() {
   if (!cfg.binId) return;
   try {
-    const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
+    const res = await fetch(`${GIST_API}/${cfg.binId}?_=${Date.now()}`, { headers: readHeaders() });
     if (!res.ok) return;
     const json = await res.json();
     const raw = await gistContent(json?.files?.[GIST_FILE]);
@@ -791,7 +791,7 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
 async function gistContent(fileObj) {
   if (!fileObj) return null;
   if (fileObj.truncated && fileObj.raw_url) {
-    const r = await fetch(fileObj.raw_url, { cache: 'no-store' });
+    const r = await fetch(fileObj.raw_url);
     if (r.ok) return r.text();
   }
   return fileObj.content ?? null;
@@ -812,19 +812,26 @@ function parseGistData(content) {
 }
 
 async function loadFromBin() {
-  if (!cfg.binId) return;
+  if (!cfg.binId) { console.warn('[wiki] loadFromBin: binId が空のためスキップ'); return; }
   setStatus('読み込み中…', false);
   try {
-    const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
+    console.log('[wiki] loadFromBin: Gist ID =', cfg.binId);
+    const res = await fetch(`${GIST_API}/${cfg.binId}?_=${Date.now()}`, { headers: readHeaders() });
+    console.log('[wiki] loadFromBin: HTTP', res.status);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    const raw = await gistContent(json?.files?.[GIST_FILE]);
+    const fileObj = json?.files?.[GIST_FILE];
+    console.log('[wiki] loadFromBin: file keys =', Object.keys(json?.files || {}), '/ truncated =', fileObj?.truncated);
+    const raw = await gistContent(fileObj);
+    console.log('[wiki] loadFromBin: raw length =', raw?.length, '/ preview =', raw?.slice(0, 80));
     const data = parseGistData(raw);
+    console.log('[wiki] loadFromBin: parsed pages =', data?.pages?.length ?? 'null');
     if (!data) throw new Error(`データの解析に失敗しました (Gist ID: ${cfg.binId})`);
     wikiData = data;
     if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
     setStatus('読み込み完了', false);
   } catch (e) {
+    console.error('[wiki] loadFromBin error:', e);
     setStatus('読み込み失敗: ' + e.message, true);
   }
 }
@@ -836,6 +843,7 @@ async function saveToBin() {
   saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
 
   const content = JSON.stringify(wikiData);
+  console.log('[wiki] saveToBin: binId =', cfg.binId, '/ pages =', wikiData.pages?.length, '/ content length =', content.length);
   const files = { [GIST_FILE]: { content } };
 
   try {
