@@ -540,16 +540,16 @@
   <div class="modal">
     <h2>⚙ 設定</h2>
     <div class="field">
-      <label>Bin ID <span style="color:var(--danger)">*</span></label>
-      <input type="text" id="cfg-binid" placeholder="64abcd1234567890abcdef12">
-      <div class="hint">JSONBin の Bin ID（空欄の場合は保存時に自動作成）</div>
+      <label>Gist ID <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="cfg-binid" placeholder="a1b2c3d4e5f6...">
+      <div class="hint">GitHub Gist の ID（空欄の場合は保存時に自動作成）</div>
       <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="copyShareUrl()">🔗 閲覧用URLをコピー</button>
       <div id="share-url-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:none;word-break:break-all;"></div>
     </div>
     <div class="field">
-      <label>API Key (X-Master-Key)　<span style="font-weight:400;color:var(--text-muted)">— 編集者のみ入力</span></label>
-      <input type="password" id="cfg-apikey" placeholder="$2a$10$... （閲覧のみなら空欄でOK）">
-      <div class="hint">入力すると書き込み可能になります。閲覧だけなら空欄でも読み込めます（Binが公開設定の場合）</div>
+      <label>GitHub Token　<span style="font-weight:400;color:var(--text-muted)">— 編集者のみ入力（gist スコープ）</span></label>
+      <input type="password" id="cfg-apikey" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
+      <div class="hint">入力すると書き込み可能になります。閲覧だけなら空欄でも読み込めます（公開 Gist の場合）</div>
     </div>
     <div class="field">
       <label>履歴保持件数</label>
@@ -603,9 +603,10 @@
 
 <script>
 // ─── State ───────────────────────────────────────────
-const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
+const GIST_API = 'https://api.github.com/gists';
+const GIST_FILE = 'wiki.json';
 let cfg = { apiKey: '', binId: '', histMax: 20 };
-let readKey = ''; // URLの ?key= から取得（読み取り専用キー）
+let readKey = ''; // 未使用（公開Gistは認証不要）
 let wikiData = { pages: [] };  // { pages: [{id, title, content, history:[{ts,content}]}] }
 let currentPageId = null;
 let dirty = false;
@@ -618,9 +619,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
   // URLパラメータから bin と key を取得（閲覧者はリンクを開くだけでOK）
   const params = new URLSearchParams(location.search);
-  const urlBin = params.get('bin'), urlKey = params.get('key');
+  const urlBin = params.get('gist') || params.get('bin');
   if (urlBin) cfg.binId = urlBin;
-  if (urlKey) readKey = urlKey; // 読み取り専用キー（書き込みには使わない）
 
   if (cfg.binId) {
     await loadFromBin();
@@ -653,21 +653,15 @@ function openSettings() {
 
 async function testApiKey() {
   const key = document.getElementById('cfg-apikey').value.trim();
-  const binId = document.getElementById('cfg-binid').value.trim();
   const btn = document.getElementById('test-api-btn');
-  if (!key) { alert('API Keyを入力してください'); return; }
+  if (!key) { alert('GitHub Token を入力してください'); return; }
   btn.disabled = true;
   btn.textContent = 'テスト中…';
   try {
-    // Test read
-    const url = binId ? `${JSONBIN_BASE}/b/${binId}/latest` : `${JSONBIN_BASE}/b`;
-    const method = binId ? 'GET' : 'POST';
-    const opts = binId
-      ? { headers: { 'X-Master-Key': key, 'Cache-Control': 'no-cache' } }
-      : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Master-Key': key, 'X-Bin-Name': 'test' }, body: '{}' };
-    const res = await fetch(binId ? `${JSONBIN_BASE}/b/${binId}/latest` : `${JSONBIN_BASE}/b`, opts);
+    const res = await fetch('https://api.github.com/user', { headers: { 'Authorization': `Bearer ${key}` } });
     const body = await res.json().catch(() => null);
-    alert(`ステータス: ${res.status}\nレスポンス: ${JSON.stringify(body)}`);
+    if (res.ok) alert(`✅ 認証成功: ${body.login}`);
+    else alert(`❌ エラー: ${res.status} — ${body?.message}`);
   } catch (e) {
     alert('通信エラー: ' + e.message);
   } finally {
@@ -682,10 +676,9 @@ function closeSettings() {
 }
 
 function copyShareUrl() {
-  const binId = document.getElementById('cfg-binid').value.trim() || cfg.binId;
-  const key   = document.getElementById('cfg-apikey').value.trim() || cfg.apiKey;
-  if (!binId) { alert('先に Bin ID を入力してください'); return; }
-  const url = `${location.origin}${location.pathname}?bin=${binId}&key=${encodeURIComponent(key)}`;
+  const gistId = document.getElementById('cfg-binid').value.trim() || cfg.binId;
+  if (!gistId) { alert('先に Gist ID を入力してください'); return; }
+  const url = `${location.origin}${location.pathname}?gist=${gistId}`;
   navigator.clipboard.writeText(url).then(() => {
     const hint = document.getElementById('share-url-hint');
     hint.textContent = '✅ コピーしました: ' + url;
@@ -733,19 +726,26 @@ function startPollingIfReadonly() {
 }
 
 function readHeaders() {
-  const h = { 'Cache-Control': 'no-cache' };
-  const key = cfg.apiKey || readKey;
-  if (key) h['X-Master-Key'] = key;
+  const h = { 'Accept': 'application/vnd.github+json', 'Cache-Control': 'no-cache' };
+  if (cfg.apiKey) h['Authorization'] = `Bearer ${cfg.apiKey}`;
   return h;
+}
+
+function writeHeaders() {
+  return {
+    'Accept': 'application/vnd.github+json',
+    'Authorization': `Bearer ${cfg.apiKey}`,
+    'Content-Type': 'application/json'
+  };
 }
 
 async function pollUpdate() {
   if (!cfg.binId) return;
   try {
-    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest?t=${Date.now()}`, { headers: readHeaders(), cache: 'no-store' });
+    const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) return;
     const json = await res.json();
-    const fresh = json.record || { pages: [] };
+    const fresh = parseGistData(gistContent(json));
     if (!Array.isArray(fresh.pages)) fresh.pages = [];
 
     // 変化がなければ何もしない
@@ -771,27 +771,38 @@ async function pollUpdate() {
   } catch (_) { /* ネットワークエラーは無視 */ }
 }
 
-// ─── JSONBin API ─────────────────────────────────────
-async function fetchWithRetry(url, options, maxRetries = 4) {
+// ─── GitHub Gist API ─────────────────────────────────
+async function fetchWithRetry(url, options, maxRetries = 3) {
   let delay = 2000;
   for (let i = 0; i <= maxRetries; i++) {
     const res = await fetch(url, options);
-    if (res.status !== 403 && res.status !== 429 && res.status !== 430) return res;
+    if (res.status !== 429) return res;
     if (i === maxRetries) return res;
-    setStatus(`一時的なエラー (${res.status}) — ${delay / 1000}秒後に再試行…`, true);
+    setStatus(`レート制限 — ${delay / 1000}秒後に再試行…`, true);
     await new Promise(r => setTimeout(r, delay));
     delay *= 2;
   }
+}
+
+function gistContent(record) {
+  return record?.files?.[GIST_FILE]?.content ?? null;
+}
+
+function parseGistData(content) {
+  if (!content) return { pages: [] };
+  try { return JSON.parse(LZString.decompressFromBase64(content)) || { pages: [] }; } catch {}
+  try { return JSON.parse(content); } catch {}  // 旧フォーマット fallback
+  return { pages: [] };
 }
 
 async function loadFromBin() {
   if (!cfg.binId) return;
   setStatus('読み込み中…', false);
   try {
-    const res = await fetch(`${JSONBIN_BASE}/b/${cfg.binId}/latest`, { headers: readHeaders(), cache: 'no-store' });
+    const res = await fetch(`${GIST_API}/${cfg.binId}`, { headers: readHeaders(), cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    wikiData = json.record || { pages: [] };
+    wikiData = parseGistData(gistContent(json));
     if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
     setStatus('読み込み完了', false);
   } catch (e) {
@@ -800,47 +811,41 @@ async function loadFromBin() {
 }
 
 async function saveToBin() {
-  if (!cfg.apiKey) { alert('API Keyを設定してください'); openSettings(); return false; }
+  if (!cfg.apiKey) { alert('GitHub Token を設定してください'); openSettings(); return false; }
   const saveBtn = document.getElementById('save-btn');
   saveBtn.disabled = true;
   saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
 
+  const content = LZString.compressToBase64(JSON.stringify(wikiData));
+  const files = { [GIST_FILE]: { content } };
+
   try {
     if (!cfg.binId) {
-      // Create new bin
-      const res = await fetchWithRetry(`${JSONBIN_BASE}/b`, {
+      // 新規 Gist 作成
+      const res = await fetchWithRetry(GIST_API, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': cfg.apiKey,
-          'X-Bin-Name': 'wiki',
-          'X-Bin-Private': 'true'
-        },
-        body: JSON.stringify(wikiData)
+        headers: writeHeaders(),
+        body: JSON.stringify({ description: 'wiki data', public: false, files })
       });
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw Object.assign(new Error(JSON.stringify(b)||`HTTP ${res.status}`), { status: res.status }); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message || `HTTP ${res.status}`); }
       const j = await res.json();
-      cfg.binId = j.metadata.id;
+      cfg.binId = j.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
-      setStatus(`Bin作成: ${cfg.binId}`, false);
+      document.getElementById('cfg-binid').value = cfg.binId;
+      setStatus(`Gist 作成: ${cfg.binId}`, false);
     } else {
-      const res = await fetchWithRetry(`${JSONBIN_BASE}/b/${cfg.binId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': cfg.apiKey,
-          'X-Bin-Versioning': 'false'
-        },
-        body: JSON.stringify(wikiData)
+      const res = await fetchWithRetry(`${GIST_API}/${cfg.binId}`, {
+        method: 'PATCH',
+        headers: writeHeaders(),
+        body: JSON.stringify({ files })
       });
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw Object.assign(new Error(JSON.stringify(b)||`HTTP ${res.status}`), { status: res.status }); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message || `HTTP ${res.status}`); }
     }
     dirty = false;
     setStatus('保存済み — ' + new Date().toLocaleTimeString('ja-JP'));
     return true;
   } catch (e) {
-    const hint = e.status === 403 ? ' — APIキーまたは月次クォータを確認してください (jsonbin.io)' : '';
-    setStatus('保存失敗: ' + e.message + hint, true);
+    setStatus('保存失敗: ' + e.message, true);
     return false;
   } finally {
     saveBtn.disabled = false;
