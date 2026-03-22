@@ -313,6 +313,7 @@
     color: var(--text-muted);
   }
   #preview hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  #preview img { max-width: 100%; height: auto; border-radius: 4px; margin: 4px 0; display: block; }
 
   .tweet-embed {
     margin: 12px 0;
@@ -634,6 +635,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyReadonlyMode();
   renderPageList();
   startPollingIfReadonly();
+
+  // ─── Image paste ─────────────────────────────────
+  document.getElementById('editor').addEventListener('paste', (e) => {
+    const editor = e.currentTarget;
+    if (editor.readOnly) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const dataUrl = ev.target.result;
+          const inserted = `![image](${dataUrl})`;
+          const start = editor.selectionStart;
+          const end   = editor.selectionEnd;
+          editor.value = editor.value.slice(0, start) + inserted + editor.value.slice(end);
+          editor.selectionStart = editor.selectionEnd = start + inserted.length;
+          markDirty();
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+    }
+  });
 });
 
 // ─── Config ──────────────────────────────────────────
@@ -1171,6 +1198,8 @@ function inlineMarkdown(text) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     // Strikethrough
     .replace(/~~(.*?)~~/g, '<del>$1</del>')
+    // Image (must come before link)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
     // Link
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     // Auto-link (not inside href)
