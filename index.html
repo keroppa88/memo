@@ -1157,10 +1157,10 @@ function markdownToHtml(md) {
 function inlineMarkdown(text) {
   return text
     // Background colors: ///g text/// ///b text/// ///r text/// ///y text///
-    .replace(/\/\/\/g\s+(.*?)\s*\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
-    .replace(/\/\/\/b\s+(.*?)\s*\/\/\//g, '<span style="background-color:#87ceeb">$1</span>')
-    .replace(/\/\/\/r\s+(.*?)\s*\/\/\//g, '<span style="background-color:#ff9999">$1</span>')
-    .replace(/\/\/\/y\s+(.*?)\s*\/\/\//g, '<span style="background-color:#ffff66">$1</span>')
+    .replace(/\/\/\/g\s*(.*?)\s*\/\/\//g, '<span style="background-color:#adff2f">$1</span>')
+    .replace(/\/\/\/b\s*(.*?)\s*\/\/\//g, '<span style="background-color:#87ceeb">$1</span>')
+    .replace(/\/\/\/r\s*(.*?)\s*\/\/\//g, '<span style="background-color:#ff9999">$1</span>')
+    .replace(/\/\/\/y\s*(.*?)\s*\/\/\//g, '<span style="background-color:#ffff66">$1</span>')
     // Bold+Italic
     .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
     // Bold
@@ -1189,14 +1189,11 @@ function embedTweets(container) {
       div.removeAttribute('data-tweet-url');
       const m = url.match(/\/status\/(\d+)/);
       if (!m) continue;
-      try {
-        const el = await window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
-        if (!el) {
-          div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;"><a href="${url}" target="_blank" rel="noopener">[削除済みツイート]</a></span>`;
-        }
-      } catch (e) {
-        div.innerHTML = `<span style="color:var(--text-muted);font-size:0.85em;"><a href="${url}" target="_blank" rel="noopener">[削除済みツイート]</a></span>`;
-      }
+      const el = await Promise.race([
+        window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' }).catch(() => null),
+        new Promise(r => setTimeout(() => r(null), 8000))
+      ]);
+      if (!el) div.innerHTML = '';
     }
   };
 
