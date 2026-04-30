@@ -550,7 +550,7 @@
     <div class="field">
       <label>GitHub Token　<span style="font-weight:400;color:var(--text-muted)">— 編集者のみ入力（gist スコープ）</span></label>
       <input type="password" id="cfg-apikey" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
-      <div class="hint">入力すると書き込み可能になります。閲覧だけなら空欄でも読み込めます（公開 Gist の場合）</div>
+      <div class="hint">入力すると書き込み可能になります。非公開 Gist（デフォルト）の閲覧にも Token が必要です。</div>
     </div>
     <div class="field">
       <label>履歴保持件数</label>
@@ -852,6 +852,11 @@ async function loadFromBin() {
     console.log('[wiki] loadFromBin: Gist ID =', cfg.binId);
     const res = await fetch(`${GIST_API}/${cfg.binId}?_=${Date.now()}`, { headers: readHeaders() });
     console.log('[wiki] loadFromBin: HTTP', res.status);
+    if (res.status === 401 || res.status === 404) {
+      setStatus('Gistにアクセスできません — GitHub Tokenを設定してください', true);
+      openSettings();
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     const fileObj = json?.files?.[GIST_FILE];
