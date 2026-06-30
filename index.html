@@ -1059,17 +1059,36 @@ function downloadPageHtml() {
   const images = page.images || {};
 
   // プレビューと同じHTMLを生成（画像は data URL に展開される）
-  let body = markdownToHtml(content, images);
+  // tweet-embed div はそのまま残し、書き出し先のスクリプトで描画する
+  const body = markdownToHtml(content, images);
 
-  // ツイート埋め込み div を Twitter 標準の blockquote に変換し、
-  // widgets.js が静的HTMLでも自動描画できるようにする
-  body = body.replace(/<div class="tweet-embed" data-tweet-url="([^"]*)"><\/div>/g,
-    (m, url) => `<blockquote class="twitter-tweet"><a href="${url}"></a></blockquote>`);
-
-  const hasTweet = /twitter-tweet/.test(body);
-  const twitterScript = hasTweet
-    ? '<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"><\/script>'
-    : '';
+  // プレビューと同じ方式（status ID を抽出して createTweet で描画）を
+  // 単体HTMLにも埋め込む。href のドメイン（x.com / twitter.com）に依存せず、
+  // file:// で開いても投稿が表示される。
+  const hasTweet = /class="tweet-embed"/.test(body);
+  const twitterScript = hasTweet ? `<script>
+(function () {
+  var divs = document.querySelectorAll('.tweet-embed[data-tweet-url]');
+  if (!divs.length) return;
+  var s = document.createElement('script');
+  s.src = 'https://platform.twitter.com/widgets.js';
+  s.charset = 'utf-8';
+  s.async = true;
+  document.head.appendChild(s);
+  var tries = 0;
+  (function render() {
+    if (window.twttr && twttr.widgets && twttr.widgets.createTweet) {
+      divs.forEach(function (div) {
+        var url = div.getAttribute('data-tweet-url') || '';
+        var m = url.match(/status\\/(\\d+)/);
+        if (m) twttr.widgets.createTweet(m[1], div, { lang: 'ja' });
+      });
+    } else if (tries++ < 40) {
+      setTimeout(render, 300);
+    }
+  })();
+})();
+<\/script>` : '';
 
   const doc = `<!DOCTYPE html>
 <html lang="ja">
@@ -1091,7 +1110,7 @@ function downloadPageHtml() {
   pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
   pre code { padding: 0; background: none; }
   blockquote { border-left: 3px solid #e0e0e0; margin: 8px 0; padding: 4px 12px; color: #5f6368; }
-  blockquote.twitter-tweet { border: none; padding: 0; margin: 12px 0; }
+  .tweet-embed { margin: 12px 0; max-width: 550px; }
   hr { border: none; border-top: 1px solid #e0e0e0; margin: 16px 0; }
   img { max-width: 100%; height: auto; border-radius: 4px; margin: 4px 0; display: block; }
 </style>
