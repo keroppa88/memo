@@ -491,6 +491,7 @@
   <button id="menu-btn" title="メニュー" onclick="toggleSidebar()">☰</button>
   <h1>📝 Memo</h1>
   <span id="readonly-badge" style="display:none">👁 閲覧のみ</span>
+  <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ DL</button>
   <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
 </header>
 
@@ -529,7 +530,6 @@
       </div>
       <div id="bottom-bar">
         <span id="status-msg">変更なし</span>
-        <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ DL</button>
         <button class="btn btn-outline history-btn" id="history-btn" onclick="openHistory()">📋 履歴</button>
         <button class="btn btn-primary" id="save-btn" onclick="savePage()">保存</button>
       </div>
