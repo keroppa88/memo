@@ -529,6 +529,7 @@
       </div>
       <div id="bottom-bar">
         <span id="status-msg">変更なし</span>
+        <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ DL</button>
         <button class="btn btn-outline history-btn" id="history-btn" onclick="openHistory()">📋 履歴</button>
         <button class="btn btn-primary" id="save-btn" onclick="savePage()">保存</button>
       </div>
@@ -1008,6 +1009,42 @@ async function savePage() {
   renderPageList();
 
   await saveToBin();
+}
+
+// ─── Download (Markdown) ─────────────────────────────
+function downloadPage() {
+  if (!currentPageId) { alert('ダウンロードするページを選択してください'); return; }
+  const page = getPage(currentPageId);
+  if (!page) return;
+
+  const title = (document.getElementById('page-title-input').value.trim() || page.title || '無題');
+  let content = document.getElementById('editor').value;
+  const images = page.images || {};
+
+  // 画像はテキスト情報（データURL）として保持しているので、
+  // img:xxx 参照を実際のデータURLに展開して自己完結型のMarkdownにする
+  content = content.replace(/!\[([^\]]*)\]\(img:([^)\s]+)\)/g, (m, alt, id) => {
+    const dataUrl = images[id];
+    return dataUrl ? `![${alt}](${dataUrl})` : m;
+  });
+
+  // タイトルを先頭の見出しとして付与（本文に見出しがなければ）
+  const md = `# ${title}\n\n${content}\n`;
+
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = sanitizeFilename(title) + '.md';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setStatus(`「${title}」をダウンロードしました`);
+}
+
+function sanitizeFilename(name) {
+  return String(name).replace(/[\/\\:*?"<>|\n\r\t]/g, '_').trim().slice(0, 100) || 'memo';
 }
 
 // ─── Delete ──────────────────────────────────────────
