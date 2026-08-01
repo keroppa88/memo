@@ -52,6 +52,17 @@
     text-overflow: ellipsis;
   }
 
+  #header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  #header-actions::-webkit-scrollbar { display: none; }
+  #header-actions > .btn { flex-shrink: 0; }
+
   #readonly-badge {
     font-size: 11px;
     padding: 3px 8px;
@@ -95,6 +106,13 @@
     color: var(--text);
   }
   .btn-outline:hover { background: var(--bg); }
+  .btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-outline.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+  }
+  .btn-outline.active:hover { background: var(--primary-hover); }
 
   .btn-danger { background: var(--danger); color: #fff; }
   .btn-danger:hover { background: #b22a1f; }
@@ -320,6 +338,29 @@
     max-width: 550px;
   }
 
+  /* ─── Multi-column preview (2列 / 3列) ───
+     縦に長いページを横に折り返して表示する。
+     CSS の column-count は列ごとに縦積み（1,2,3 が1列目）になってしまうため、
+     行方向に流れる grid を使う（3列なら 123 / 456 / 789）。 */
+  #preview.cols-2, #preview.cols-3 {
+    display: grid;
+    align-items: start;
+    align-content: start;   /* 行が余白を分け合って間延びするのを防ぐ */
+    column-gap: 20px;
+    row-gap: 20px;
+  }
+  #preview.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #preview.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  /* 1マス＝1ブロック（groupForColumns が .col-item にまとめる） */
+  #preview.cols-2 > *, #preview.cols-3 > * { min-width: 0; }
+  .col-item > *:first-child { margin-top: 0; }
+  .col-item > *:last-child { margin-bottom: 0; }
+  #preview.cols-2 .tweet-embed, #preview.cols-3 .tweet-embed {
+    max-width: 100%;
+    margin: 0;
+  }
+
   /* ─── Bottom bar ─── */
   #bottom-bar {
     display: flex;
@@ -451,8 +492,18 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ─── Responsive ─── */
+  @media (max-width: 860px) {
+    /* ボタンが増えたのでヘッダーを詰める */
+    #header { gap: 5px; padding: 0 8px; }
+    #header h1 { font-size: 15px; }
+    #header .btn { padding: 7px 8px; font-size: 12px; }
+    #header-actions { gap: 5px; }
+  }
+
   @media (max-width: 640px) {
     #menu-btn { display: block; }
+
+    #header h1 { display: none; }
 
     #sidebar {
       position: fixed;
@@ -491,9 +542,14 @@
   <button id="menu-btn" title="メニュー" onclick="toggleSidebar()">☰</button>
   <h1>📝 Memo</h1>
   <span id="readonly-badge" style="display:none">👁 閲覧のみ</span>
-  <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ MD</button>
-  <button class="btn btn-outline" id="download-html-btn" onclick="downloadPageHtml()" title="このページをHTMLでダウンロード（ツイート埋め込み・画像を保持）">⬇ HTML</button>
-  <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
+  <div id="header-actions">
+    <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
+    <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
+    <button class="btn btn-outline" id="screenshot-btn" onclick="takeScreenshot()" title="ページ表示領域をスクショしてJPG（画質90%）で保存">📷 スクショ</button>
+    <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ MD</button>
+    <button class="btn btn-outline" id="download-html-btn" onclick="downloadPageHtml()" title="このページをHTMLでダウンロード（ツイート埋め込み・画像を保持）">⬇ HTML</button>
+    <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
+  </div>
 </header>
 
 <!-- Sidebar overlay (mobile) -->
@@ -1033,19 +1089,23 @@ function downloadPage() {
   const md = `# ${title}\n\n${content}\n`;
 
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = sanitizeFilename(title) + '.md';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, sanitizeFilename(title) + '.md');
   setStatus(`「${title}」をダウンロードしました`);
 }
 
 function sanitizeFilename(name) {
   return String(name).replace(/[\/\\:*?"<>|\n\r\t]/g, '_').trim().slice(0, 100) || 'memo';
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ─── Download (HTML, ツイート埋め込み・画像を保持) ────
@@ -1123,15 +1183,145 @@ ${twitterScript}
 </html>`;
 
   const blob = new Blob([doc], { type: 'text/html;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = sanitizeFilename(title) + '.html';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, sanitizeFilename(title) + '.html');
   setStatus(`「${title}」をHTMLでダウンロードしました`);
+}
+
+// ─── Screenshot (ページ表示領域 → JPG 90%) ───────────
+// 埋め込みツイートは別ドメインの iframe なので html2canvas 等では描画できない。
+// 画面キャプチャ API で実際の表示をそのまま取得し、表示領域だけ切り出す。
+const SCREENSHOT_QUALITY = 0.9;
+let screenshotDir = null;      // 保存先フォルダ（デスクトップ）のハンドル
+const screenshotSeq = {};      // ダウンロードにフォールバックした場合の連番
+
+async function takeScreenshot() {
+  if (!currentPageId) { alert('スクショするページを選択してください'); return; }
+  const page = getPage(currentPageId);
+  const title = (document.getElementById('page-title-input').value.trim() || page?.title || '無題');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    alert('このブラウザは画面キャプチャに対応していません（Chrome / Edge をお使いください）');
+    return;
+  }
+
+  const btn = document.getElementById('screenshot-btn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '撮影中…';
+  let stream = null;
+  try {
+    setStatus('キャプチャ対象に「このタブ」を選んでください…');
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser' },
+      audio: false,
+      preferCurrentTab: true,
+      selfBrowserSurface: 'include',
+      surfaceSwitching: 'exclude'
+    });
+    const blob = await captureAreaJpeg(stream, document.getElementById('editor-container'));
+    await saveScreenshot(blob, title);
+  } catch (e) {
+    if (e.name === 'NotAllowedError' || e.name === 'AbortError') setStatus('スクショをキャンセルしました');
+    else { console.error('[wiki] screenshot error:', e); setStatus('スクショ失敗: ' + e.message, true); }
+  } finally {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// キャプチャ映像から1フレーム取り出し、target の矩形で切り抜いて JPEG 化する
+async function captureAreaJpeg(stream, target) {
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  await new Promise((res, rej) => {
+    video.onloadedmetadata = res;
+    video.onerror = () => rej(new Error('映像を取得できませんでした'));
+  });
+  await video.play();
+  // 最初のフレームは白紙のことがあるので描画を数フレーム待つ
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 200));
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) throw new Error('映像サイズを取得できませんでした');
+
+  let sx = 0, sy = 0, sw = vw, sh = vh;
+  // タブ全体がキャプチャされている場合のみ表示領域で切り抜く
+  // （画面全体・別ウィンドウを選ばれた場合は座標が合わないので全体を保存）
+  const sameSurface = Math.abs((vw / vh) - (window.innerWidth / window.innerHeight)) < 0.08;
+  if (sameSurface) {
+    const scale = vw / window.innerWidth;
+    const rect = target.getBoundingClientRect();
+    sx = Math.max(0, Math.round(rect.left * scale));
+    sy = Math.max(0, Math.round(rect.top * scale));
+    sw = Math.max(1, Math.min(vw - sx, Math.round(rect.width * scale)));
+    sh = Math.max(1, Math.min(vh - sy, Math.round(rect.height * scale)));
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = sw;
+  canvas.height = sh;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';           // JPEG は透明を扱えないので下地を白に
+  ctx.fillRect(0, 0, sw, sh);
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  video.pause();
+  video.srcObject = null;
+
+  return await new Promise((res, rej) => {
+    canvas.toBlob(b => b ? res(b) : rej(new Error('画像の生成に失敗しました')), 'image/jpeg', SCREENSHOT_QUALITY);
+  });
+}
+
+// ファイル名は「ページ名-連番.jpg」。
+// 保存先フォルダは初回だけ選択（デスクトップが初期表示）し、以降は無確認で保存する。
+async function saveScreenshot(blob, title) {
+  const base = sanitizeFilename(title);
+
+  if (window.showDirectoryPicker) {
+    try {
+      if (!screenshotDir) {
+        setStatus('保存先フォルダ（デスクトップ）を選んでください…');
+        screenshotDir = await window.showDirectoryPicker({ id: 'memo-screenshots', mode: 'readwrite', startIn: 'desktop' });
+      }
+      const name = await nextScreenshotName(screenshotDir, base);
+      const handle = await screenshotDir.getFileHandle(name, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      setStatus(`スクショを保存しました: ${name}`);
+      return;
+    } catch (e) {
+      screenshotDir = null;
+      if (e.name === 'AbortError') { setStatus('保存をキャンセルしました'); return; }
+      console.warn('[wiki] フォルダ保存に失敗、ダウンロードにフォールバック:', e);
+    }
+  }
+
+  // フォールバック（Safari/Firefox など）: 通常のダウンロード
+  screenshotSeq[base] = (screenshotSeq[base] || 0) + 1;
+  const name = `${base}-${screenshotSeq[base]}.jpg`;
+  downloadBlob(blob, name);
+  setStatus(`スクショを保存しました: ${name}（ダウンロードフォルダ）`);
+}
+
+// 保存先にある同名ファイルを調べて次の連番を決める
+async function nextScreenshotName(dir, base) {
+  const re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(\\d+)\\.jpg$', 'i');
+  let max = 0;
+  try {
+    for await (const key of dir.keys()) {
+      const m = key.match(re);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+  } catch (e) {
+    console.warn('[wiki] 保存先の一覧取得に失敗:', e);
+  }
+  return `${base}-${max + 1}.jpg`;
 }
 
 // ─── Delete ──────────────────────────────────────────
@@ -1202,6 +1392,7 @@ function restoreHistory(index) {
 
 // ─── Editor / Preview ────────────────────────────────
 let currentMode = 'edit';
+let columnCount = 1;   // 1 / 2 / 3
 
 function setMode(mode) {
   currentMode = mode;
@@ -1217,11 +1408,38 @@ function setMode(mode) {
     prevBtn.classList.remove('active');
   } else {
     editor.style.display  = 'none';
-    preview.style.display = 'block';
+    preview.style.display = previewDisplay();
     editBtn.classList.remove('active');
     prevBtn.classList.add('active');
     renderPreview();
   }
+}
+
+function previewDisplay() { return columnCount > 1 ? 'grid' : 'block'; }
+
+// ─── Columns (2列 / 3列) ─────────────────────────────
+// 縦に長いページ（ツイートの羅列など）を横に折り返して表示する。
+// 同じ列数のボタンをもう一度押すと1列に戻る。
+function setColumns(n) {
+  columnCount = (columnCount === n) ? 1 : n;
+  applyColumns();
+  if (columnCount > 1 && currentMode !== 'preview') {
+    // 列表示はプレビュー用なので自動でプレビューへ切り替え（setMode 内で再描画）
+    setMode('preview');
+  } else if (currentMode === 'preview') {
+    // 埋め込みツイートを新しい列幅で作り直すため再描画する
+    renderPreview();
+  }
+  setStatus(columnCount > 1 ? `${columnCount}列表示` : '1列表示');
+}
+
+function applyColumns() {
+  const preview = document.getElementById('preview');
+  preview.classList.remove('cols-2', 'cols-3');
+  if (columnCount > 1) preview.classList.add('cols-' + columnCount);
+  if (currentMode === 'preview') preview.style.display = previewDisplay();
+  document.getElementById('col2-btn').classList.toggle('active', columnCount === 2);
+  document.getElementById('col3-btn').classList.toggle('active', columnCount === 3);
 }
 
 function renderPreview() {
@@ -1230,8 +1448,52 @@ function renderPreview() {
   const html = markdownToHtml(raw, images);
   const preview = document.getElementById('preview');
   preview.innerHTML = html;
+  if (columnCount > 1) groupForColumns(preview);
   // Load tweet embeds
   embedTweets(preview);
+}
+
+// 列表示用に、プレビューの中身を「1マス＝1ブロック」にまとめ直す。
+// ツイート・画像・段落はそれぞれ1マス、見出しは続く本文と同じマスに入れる。
+// 空行（<p></p>）はマスを消費せず区切りとして扱う。
+function groupForColumns(preview) {
+  const nodes = Array.from(preview.childNodes);
+  const frag = document.createDocumentFragment();
+  let group = null;
+
+  const cell = () => {
+    const div = document.createElement('div');
+    div.className = 'col-item';
+    frag.appendChild(div);
+    return div;
+  };
+
+  for (const node of nodes) {
+    if (node.nodeType !== Node.ELEMENT_NODE) { node.remove(); continue; }
+    const tag = node.tagName.toLowerCase();
+
+    // 空行 → 区切り（マスは作らない）
+    if (tag === 'p' && !node.innerHTML.trim()) { group = null; node.remove(); continue; }
+
+    // ツイート・区切り線は必ず単独のマス
+    if (node.classList.contains('tweet-embed') || tag === 'hr') {
+      group = null;
+      cell().appendChild(node);
+      continue;
+    }
+
+    // 見出しは新しいマスを開き、続く本文を同じマスに入れる
+    if (/^h[1-3]$/.test(tag)) {
+      group = cell();
+      group.appendChild(node);
+      continue;
+    }
+
+    (group || cell()).appendChild(node);
+  }
+
+  preview.textContent = '';   // 移動しきれなかった残りを掃除
+  preview.appendChild(frag);
 }
 
 // ─── Markdown parser (lightweight) ───────────────────
