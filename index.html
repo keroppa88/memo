@@ -543,6 +543,7 @@
   <h1>📝 Memo</h1>
   <span id="readonly-badge" style="display:none">👁 閲覧のみ</span>
   <div id="header-actions">
+    <button class="btn btn-outline" id="col1-btn" onclick="setColumns(1)" title="プレビューを1列（通常）で表示">1列</button>
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
     <button class="btn btn-outline" id="screenshot-btn" onclick="takeScreenshot()" title="ページ表示領域をスクショしてデスクトップの memophoto フォルダに保存（JPG 画質90%）&#10;ショートカット: Shift+P">📷 スクショ</button>
@@ -691,6 +692,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   // Bin IDもAPIキーもない → 空の状態で表示（閲覧者はURLにbinを付けてアクセス）
   applyReadonlyMode();
+  applyColumns();
   renderPageList();
   startPollingIfReadonly();
 
@@ -1218,17 +1220,34 @@ async function takeScreenshot() {
   btn.disabled = true;
   btn.textContent = '撮影中…';
   try {
+    // 保存先の準備を先に済ませる。
+    // フォルダ選択はユーザー操作の直後でないと開けず、キャプチャ許可の
+    // ダイアログを操作している間に期限切れになるため、順番が重要。
+    if (window.showDirectoryPicker && !shotDir) {
+      const prompted = await prepareShotDir();
+      if (prompted && !isCaptureLive()) {
+        // フォルダ選択で操作を使い切ったので、キャプチャ許可は次の操作で取る
+        setStatus(`保存先を ${SHOT_DIR_NAME} に設定しました — もう一度押すと撮影します`);
+        return;
+      }
+    }
     const frame = await grabFrame();
     const blob  = await captureAreaJpeg(frame, document.getElementById('editor-container'));
     if (frame.close) frame.close();          // ImageBitmap を解放
     await saveScreenshot(blob, title);
   } catch (e) {
     if (e.name === 'NotAllowedError' || e.name === 'AbortError') setStatus('スクショをキャンセルしました');
-    else { console.error('[wiki] screenshot error:', e); setStatus('スクショ失敗: ' + e.message, true); }
+    else if (e.name === 'SecurityError') setStatus('もう一度スクショを押してください（操作の直後でないとフォルダを開けません）', true);
+    else { console.error('[wiki] screenshot error:', e); setStatus(`スクショ失敗: ${e.name} — ${e.message}`, true); }
   } finally {
     btn.disabled = false;
     btn.textContent = label;
   }
+}
+
+function isCaptureLive() {
+  const track = captureStream && captureStream.getVideoTracks()[0];
+  return !!track && track.readyState === 'live';
 }
 
 // キャプチャ用ストリームを用意する。
@@ -1341,17 +1360,17 @@ function fsIdb(mode, fn) {
   }));
 }
 
-async function getShotDir() {
-  if (shotDir) return shotDir;
+// 保存先を用意する。ダイアログを出した（＝ユーザー操作を使い切った）場合 true。
+async function prepareShotDir() {
+  if (shotDir) return false;
 
-  // 前回選んだフォルダを復元（権限が残っていればダイアログなし）
+  // 前回選んだフォルダを復元。権限が残っていればダイアログなしで使える。
   const saved = await fsIdb('readonly', s => s.get(FS_KEY)).catch(() => null);
   if (saved) {
     try {
       const opts = { mode: 'readwrite' };
-      let perm = await saved.queryPermission(opts);
-      if (perm !== 'granted') perm = await saved.requestPermission(opts);
-      if (perm === 'granted') { shotDir = saved; return shotDir; }
+      if (await saved.queryPermission(opts) === 'granted') { shotDir = saved; return false; }
+      if (await saved.requestPermission(opts) === 'granted') { shotDir = saved; return true; }
     } catch (e) {
       console.warn('[wiki] 保存先の復元に失敗:', e);
     }
@@ -1364,7 +1383,7 @@ async function getShotDir() {
     ? base                                                  // すでに memophoto を選んだ場合
     : await base.getDirectoryHandle(SHOT_DIR_NAME, { create: true });
   await fsIdb('readwrite', s => s.put(shotDir, FS_KEY)).catch(e => console.warn('[wiki] 保存先を記憶できませんでした:', e));
-  return shotDir;
+  return true;
 }
 
 // ファイル名は「ページ名 + 年月日 + 時分秒.jpg」（例: Xトレード20260801202245.jpg）
@@ -1378,10 +1397,10 @@ function screenshotName(base) {
 async function saveScreenshot(blob, title) {
   const name = screenshotName(sanitizeFilename(title)) + '.jpg';
 
-  if (window.showDirectoryPicker) {
+  let reason = 'このブラウザはフォルダ保存に非対応';
+  if (shotDir) {
     try {
-      const dir = await getShotDir();
-      const handle = await dir.getFileHandle(name, { create: true });
+      const handle = await shotDir.getFileHandle(name, { create: true });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
@@ -1389,14 +1408,17 @@ async function saveScreenshot(blob, title) {
       return;
     } catch (e) {
       shotDir = null;
-      if (e.name === 'AbortError') { setStatus('保存をキャンセルしました'); return; }
       console.warn('[wiki] フォルダ保存に失敗、ダウンロードにフォールバック:', e);
+      reason = e.name + ': ' + e.message;
     }
+  } else if (window.showDirectoryPicker) {
+    reason = '保存先が未設定';
   }
 
   // フォールバック（Safari/Firefox など）: 通常のダウンロード
+  // ブラウザの設定次第で毎回「名前を付けて保存」が出るので、理由を必ず表示する
   downloadBlob(blob, name);
-  setStatus(`📷 ${name}（ダウンロードフォルダ）`);
+  setStatus(`📷 ${name} — ダウンロードで保存しました（${reason}）`, true);
 }
 
 // ─── Delete ──────────────────────────────────────────
@@ -1513,6 +1535,7 @@ function applyColumns() {
   preview.classList.remove('cols-2', 'cols-3');
   if (columnCount > 1) preview.classList.add('cols-' + columnCount);
   if (currentMode === 'preview') preview.style.display = previewDisplay();
+  document.getElementById('col1-btn').classList.toggle('active', columnCount === 1);
   document.getElementById('col2-btn').classList.toggle('active', columnCount === 2);
   document.getElementById('col3-btn').classList.toggle('active', columnCount === 3);
 }
