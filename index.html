@@ -291,6 +291,10 @@
   #preview {
     flex: 1;
     overflow-y: auto;
+    /* スクロールバーの出入りで内容の幅が変わると、埋め込みツイートが
+       それに合わせて再描画され、伸び縮みを繰り返してしまう。
+       常に同じ幅を確保しておく。 */
+    scrollbar-gutter: stable;
     padding: 16px;
     display: none;
     font-size: 15px;
@@ -1540,7 +1544,10 @@ function applyColumns() {
   document.getElementById('col3-btn').classList.toggle('active', columnCount === 3);
 }
 
+let previewToken = 0;   // 描画のたびに増やし、前回の埋め込み処理を無効化する
+
 function renderPreview() {
+  previewToken++;
   const raw = document.getElementById('editor').value;
   const images = getPage(currentPageId)?.images || {};
   const html = markdownToHtml(raw, images);
@@ -1707,40 +1714,50 @@ function inlineMarkdown(text, images = {}) {
 }
 
 // ─── Tweet embedding ─────────────────────────────────
-function embedTweets(container) {
-  const divs = container.querySelectorAll('.tweet-embed[data-tweet-url]');
-  if (divs.length === 0) return;
+let twitterScriptLoading = false;
 
-  const processDivs = async () => {
+function embedTweets(container) {
+  const divs = Array.from(container.querySelectorAll('.tweet-embed[data-tweet-url]'));
+  if (divs.length === 0) return;
+  const token = previewToken;   // 描画が切り替わったら古い処理は手を引く
+
+  const render = () => {
+    if (token !== previewToken) return;
+    // 並列に作る。直列だと後ろのツイートほど待たされ、
+    // 読み込みの遅いものが延々と後ろに詰まってしまう。
     for (const div of divs) {
       const url = div.dataset.tweetUrl;
       if (!url) continue;
       div.removeAttribute('data-tweet-url');
       const m = url.match(/\/status\/(\d+)/);
       if (!m) continue;
-      const el = await Promise.race([
-        Promise.resolve().then(() => window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' })).catch(() => null),
-        new Promise(r => setTimeout(() => r(null), 8000))
-      ]);
-      if (!el) div.innerHTML = '';
+      Promise.resolve()
+        .then(() => window.twttr.widgets.createTweet(m[1], div, { lang: 'ja' }))
+        .then(el => {
+          // createTweet は投稿が見つからないとき undefined を返す。
+          // そのときだけ空にする。時間切れで消すと描画途中のツイートを
+          // 壊してしまい、出たり消えたりの原因になる。
+          if (token === previewToken && el === undefined) div.innerHTML = '';
+        })
+        .catch(e => console.warn('[wiki] ツイートの埋め込みに失敗:', e));
     }
   };
 
-  if (!window.twttr) {
+  if (!window.twttr && !twitterScriptLoading) {
+    twitterScriptLoading = true;
     const s = document.createElement('script');
     s.src = 'https://platform.twitter.com/widgets.js';
     s.charset = 'utf-8';
     s.async = true;
+    s.onerror = () => { twitterScriptLoading = false; };
     document.head.appendChild(s);
   }
 
   let tries = 0;
   const tryLoad = () => {
-    if (window.twttr && window.twttr.widgets && window.twttr.widgets.createTweet) {
-      processDivs();
-    } else if (tries++ < 30) {
-      setTimeout(tryLoad, 300);
-    }
+    if (token !== previewToken) return;
+    if (window.twttr && window.twttr.widgets && window.twttr.widgets.createTweet) render();
+    else if (tries++ < 60) setTimeout(tryLoad, 250);
   };
   tryLoad();
 }
