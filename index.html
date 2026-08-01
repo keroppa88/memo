@@ -1200,7 +1200,6 @@ let captureStream = null;      // 画面キャプチャのストリーム（使�
 let captureGrabber = null;     // ImageCapture（フレーム取得用）
 let captureVideo  = null;      // ImageCapture 非対応ブラウザ用のフォールバック
 let shotDir       = null;      // 保存先 memophoto フォルダのハンドル
-const usedShotNames = new Set(); // 同じ秒に連写したときの重複避け
 
 async function takeScreenshot() {
   if (!currentPageId) { alert('スクショするページを選択してください'); return; }
@@ -1377,20 +1376,15 @@ function screenshotName(base) {
 }
 
 async function saveScreenshot(blob, title) {
-  const base = sanitizeFilename(title);
-  const stem = screenshotName(base);
+  const name = screenshotName(sanitizeFilename(title)) + '.jpg';
 
   if (window.showDirectoryPicker) {
     try {
       const dir = await getShotDir();
-      // 同じ秒に連写した場合だけ枝番を足す
-      let name = `${stem}.jpg`;
-      for (let i = 2; await fileExists(dir, name); i++) name = `${stem}-${i}.jpg`;
       const handle = await dir.getFileHandle(name, { create: true });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      usedShotNames.add(name);
       setStatus(`📷 ${SHOT_DIR_NAME}/${name}`);
       return;
     } catch (e) {
@@ -1401,18 +1395,8 @@ async function saveScreenshot(blob, title) {
   }
 
   // フォールバック（Safari/Firefox など）: 通常のダウンロード
-  // 保存先を覗けないので、同じ秒の重複はこのセッション内の記録で避ける
-  let name = `${stem}.jpg`;
-  for (let i = 2; usedShotNames.has(name); i++) name = `${stem}-${i}.jpg`;
-  usedShotNames.add(name);
   downloadBlob(blob, name);
   setStatus(`📷 ${name}（ダウンロードフォルダ）`);
-}
-
-// 保存先に同名ファイルがあるか
-async function fileExists(dir, name) {
-  try { await dir.getFileHandle(name); return true; }
-  catch { return false; }
 }
 
 // ─── Delete ──────────────────────────────────────────
