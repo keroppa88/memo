@@ -545,7 +545,7 @@
   <div id="header-actions">
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
-    <button class="btn btn-outline" id="screenshot-btn" onclick="takeScreenshot()" title="ページ表示領域をスクショしてJPG（画質90%）で保存">📷 スクショ</button>
+    <button class="btn btn-outline" id="screenshot-btn" onclick="takeScreenshot()" title="ページ表示領域をスクショしてデスクトップの memophoto フォルダに保存（JPG 画質90%）&#10;ショートカット: Shift+P">📷 スクショ</button>
     <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ MD</button>
     <button class="btn btn-outline" id="download-html-btn" onclick="downloadPageHtml()" title="このページをHTMLでダウンロード（ツイート埋め込み・画像を保持）">⬇ HTML</button>
     <button class="btn btn-outline" onclick="openSettings()">⚙ 設定</button>
@@ -1190,9 +1190,16 @@ ${twitterScript}
 // ─── Screenshot (ページ表示領域 → JPG 90%) ───────────
 // 埋め込みツイートは別ドメインの iframe なので html2canvas 等では描画できない。
 // 画面キャプチャ API で実際の表示をそのまま取得し、表示領域だけ切り出す。
+//
+// 連続で撮れるように、一度取得したキャプチャ用ストリームと保存先フォルダは
+// 使い回す。ブラウザの許可ダイアログはどちらも最初の1回だけ。
 const SCREENSHOT_QUALITY = 0.9;
-let screenshotDir = null;      // 保存先フォルダ（デスクトップ）のハンドル
-const screenshotSeq = {};      // ダウンロードにフォールバックした場合の連番
+const SHOT_DIR_NAME = 'memophoto';   // デスクトップ直下に自動作成するフォルダ
+
+let captureStream = null;      // 画面キャプチャのストリーム（使い回す）
+let captureGrabber = null;     // ImageCapture（フレーム取得用）
+let captureVideo  = null;      // ImageCapture 非対応ブラウザ用のフォールバック
+let shotDir       = null;      // 保存先 memophoto フォルダのハンドル
 
 async function takeScreenshot() {
   if (!currentPageId) { alert('スクショするページを選択してください'); return; }
@@ -1205,47 +1212,85 @@ async function takeScreenshot() {
   }
 
   const btn = document.getElementById('screenshot-btn');
-  const label = btn.textContent;
+  const label = btn.dataset.label || btn.textContent;
+  btn.dataset.label = label;
+  if (btn.disabled) return;          // 連打の取りこぼしを防ぐ
   btn.disabled = true;
   btn.textContent = '撮影中…';
-  let stream = null;
   try {
-    setStatus('キャプチャ対象に「このタブ」を選んでください…');
-    stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { displaySurface: 'browser' },
-      audio: false,
-      preferCurrentTab: true,
-      selfBrowserSurface: 'include',
-      surfaceSwitching: 'exclude'
-    });
-    const blob = await captureAreaJpeg(stream, document.getElementById('editor-container'));
+    const frame = await grabFrame();
+    const blob  = await captureAreaJpeg(frame, document.getElementById('editor-container'));
+    if (frame.close) frame.close();          // ImageBitmap を解放
     await saveScreenshot(blob, title);
   } catch (e) {
     if (e.name === 'NotAllowedError' || e.name === 'AbortError') setStatus('スクショをキャンセルしました');
     else { console.error('[wiki] screenshot error:', e); setStatus('スクショ失敗: ' + e.message, true); }
   } finally {
-    if (stream) stream.getTracks().forEach(t => t.stop());
     btn.disabled = false;
     btn.textContent = label;
   }
 }
 
-// キャプチャ映像から1フレーム取り出し、target の矩形で切り抜いて JPEG 化する
-async function captureAreaJpeg(stream, target) {
-  const video = document.createElement('video');
-  video.srcObject = stream;
-  video.muted = true;
-  video.playsInline = true;
-  await new Promise((res, rej) => {
-    video.onloadedmetadata = res;
-    video.onerror = () => rej(new Error('映像を取得できませんでした'));
-  });
-  await video.play();
-  // 最初のフレームは白紙のことがあるので描画を数フレーム待つ
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  await new Promise(r => setTimeout(r, 200));
+// キャプチャ用ストリームを用意する。
+// 生きている間は使い回すので、2枚目以降は許可ダイアログが出ない。
+async function getCaptureTrack() {
+  let track = captureStream && captureStream.getVideoTracks()[0];
+  if (track && track.readyState === 'live') return track;
 
-  const vw = video.videoWidth, vh = video.videoHeight;
+  captureStream = null;
+  captureGrabber = null;
+  setStatus('キャプチャの許可は最初の1回だけです — 「このタブ」を許可してください…');
+  captureStream = await navigator.mediaDevices.getDisplayMedia({
+    video: { displaySurface: 'browser' },
+    audio: false,
+    preferCurrentTab: true,
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'exclude'
+  });
+  track = captureStream.getVideoTracks()[0];
+  // ブラウザの「共有を停止」で止められたら次回に取り直す
+  track.addEventListener('ended', () => { captureStream = null; captureGrabber = null; });
+  return track;
+}
+
+// 現在のフレームを取得する。
+// ImageCapture ならフレームを直接もらえる。非対応ブラウザでは video 経由。
+// （video を画面外に置くと requestVideoFrameCallback が発火しないため、
+//   フォールバックでは rAF ＋ 少し待つ方式にしている）
+async function grabFrame() {
+  const track = await getCaptureTrack();
+
+  if (typeof ImageCapture !== 'undefined') {
+    if (!captureGrabber) captureGrabber = new ImageCapture(track);
+    return await captureGrabber.grabFrame();
+  }
+
+  if (!captureVideo) {
+    captureVideo = document.createElement('video');
+    captureVideo.muted = true;
+    captureVideo.playsInline = true;
+    // 画面外に置く（表示領域に入るとキャプチャが入れ子に映り込むため）
+    captureVideo.style.cssText = 'position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+    document.body.appendChild(captureVideo);
+  }
+  if (captureVideo.srcObject !== captureStream) {
+    captureVideo.srcObject = captureStream;
+    await new Promise((res, rej) => {
+      captureVideo.onloadedmetadata = res;
+      captureVideo.onerror = () => rej(new Error('映像を取得できませんでした'));
+    });
+    await captureVideo.play();
+    await new Promise(r => setTimeout(r, 250));   // 最初のフレームが白紙のことがある
+  }
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  return captureVideo;
+}
+
+// フレームを target の矩形で切り抜いて JPEG 化する
+// （frame は ImageBitmap または video 要素）
+async function captureAreaJpeg(frame, target) {
+  const vw = frame.videoWidth || frame.width;
+  const vh = frame.videoHeight || frame.height;
   if (!vw || !vh) throw new Error('映像サイズを取得できませんでした');
 
   let sx = 0, sy = 0, sw = vw, sh = vh;
@@ -1267,61 +1312,91 @@ async function captureAreaJpeg(stream, target) {
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#ffffff';           // JPEG は透明を扱えないので下地を白に
   ctx.fillRect(0, 0, sw, sh);
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-
-  video.pause();
-  video.srcObject = null;
+  ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, sw, sh);
 
   return await new Promise((res, rej) => {
     canvas.toBlob(b => b ? res(b) : rej(new Error('画像の生成に失敗しました')), 'image/jpeg', SCREENSHOT_QUALITY);
   });
 }
 
-// ファイル名は「ページ名-連番.jpg」。
-// 保存先フォルダは初回だけ選択（デスクトップが初期表示）し、以降は無確認で保存する。
+// ─── 保存先フォルダ（デスクトップ/memophoto） ─────────
+// 初回だけデスクトップを選んでもらい、その下に memophoto を自動作成する。
+// ハンドルは IndexedDB に残すので、次回以降はフォルダ選択なしで保存できる。
+const FS_DB = 'memo-fs', FS_STORE = 'handles', FS_KEY = 'shotDir';
+
+function fsDb() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(FS_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(FS_STORE);
+    req.onsuccess = () => res(req.result);
+    req.onerror   = () => rej(req.error);
+  });
+}
+
+function fsIdb(mode, fn) {
+  return fsDb().then(db => new Promise((res, rej) => {
+    const req = fn(db.transaction(FS_STORE, mode).objectStore(FS_STORE));
+    req.onsuccess = () => res(req.result);
+    req.onerror   = () => rej(req.error);
+  }));
+}
+
+async function getShotDir() {
+  if (shotDir) return shotDir;
+
+  // 前回選んだフォルダを復元（権限が残っていればダイアログなし）
+  const saved = await fsIdb('readonly', s => s.get(FS_KEY)).catch(() => null);
+  if (saved) {
+    try {
+      const opts = { mode: 'readwrite' };
+      let perm = await saved.queryPermission(opts);
+      if (perm !== 'granted') perm = await saved.requestPermission(opts);
+      if (perm === 'granted') { shotDir = saved; return shotDir; }
+    } catch (e) {
+      console.warn('[wiki] 保存先の復元に失敗:', e);
+    }
+  }
+
+  // 初回のみ: デスクトップを選んでもらい、その下に memophoto を作る
+  setStatus(`保存先は最初の1回だけです — デスクトップを選ぶと ${SHOT_DIR_NAME} フォルダを作ります…`);
+  const base = await window.showDirectoryPicker({ id: 'memo-shots', mode: 'readwrite', startIn: 'desktop' });
+  shotDir = base.name === SHOT_DIR_NAME
+    ? base                                                  // すでに memophoto を選んだ場合
+    : await base.getDirectoryHandle(SHOT_DIR_NAME, { create: true });
+  await fsIdb('readwrite', s => s.put(shotDir, FS_KEY)).catch(e => console.warn('[wiki] 保存先を記憶できませんでした:', e));
+  return shotDir;
+}
+
+// ファイル名は「ページ名 + 年月日 + 時分秒.jpg」（例: Xトレード20260801202245.jpg）
+function screenshotName(base) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return base + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+              + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
 async function saveScreenshot(blob, title) {
-  const base = sanitizeFilename(title);
+  const name = screenshotName(sanitizeFilename(title)) + '.jpg';
 
   if (window.showDirectoryPicker) {
     try {
-      if (!screenshotDir) {
-        setStatus('保存先フォルダ（デスクトップ）を選んでください…');
-        screenshotDir = await window.showDirectoryPicker({ id: 'memo-screenshots', mode: 'readwrite', startIn: 'desktop' });
-      }
-      const name = await nextScreenshotName(screenshotDir, base);
-      const handle = await screenshotDir.getFileHandle(name, { create: true });
+      const dir = await getShotDir();
+      const handle = await dir.getFileHandle(name, { create: true });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      setStatus(`スクショを保存しました: ${name}`);
+      setStatus(`📷 ${SHOT_DIR_NAME}/${name}`);
       return;
     } catch (e) {
-      screenshotDir = null;
+      shotDir = null;
       if (e.name === 'AbortError') { setStatus('保存をキャンセルしました'); return; }
       console.warn('[wiki] フォルダ保存に失敗、ダウンロードにフォールバック:', e);
     }
   }
 
   // フォールバック（Safari/Firefox など）: 通常のダウンロード
-  screenshotSeq[base] = (screenshotSeq[base] || 0) + 1;
-  const name = `${base}-${screenshotSeq[base]}.jpg`;
   downloadBlob(blob, name);
-  setStatus(`スクショを保存しました: ${name}（ダウンロードフォルダ）`);
-}
-
-// 保存先にある同名ファイルを調べて次の連番を決める
-async function nextScreenshotName(dir, base) {
-  const re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(\\d+)\\.jpg$', 'i');
-  let max = 0;
-  try {
-    for await (const key of dir.keys()) {
-      const m = key.match(re);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
-    }
-  } catch (e) {
-    console.warn('[wiki] 保存先の一覧取得に失敗:', e);
-  }
-  return `${base}-${max + 1}.jpg`;
+  setStatus(`📷 ${name}（ダウンロードフォルダ）`);
 }
 
 // ─── Delete ──────────────────────────────────────────
@@ -1702,6 +1777,14 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
     if (currentPageId) savePage();
+  }
+
+  // Shift+P でスクショ（文字入力中は大文字のPを打てるよう無効）
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'P' || e.key === 'p')) {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    e.preventDefault();
+    takeScreenshot();
   }
 });
 </script>
