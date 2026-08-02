@@ -365,14 +365,46 @@
   #preview.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #preview.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
-  /* 1マス＝1ブロック（groupForColumns が .col-item にまとめる） */
-  #preview.cols-2 > *, #preview.cols-3 > * { min-width: 0; }
-  .col-item > *:first-child { margin-top: 0; }
-  .col-item > *:last-child { margin-bottom: 0; }
+  /* 1マス＝1ブロック（.blk）。本文の切れ目と1対1で対応する。 */
+  .blk { position: relative; }
+  .blk > *:first-child { margin-top: 0; }
+  .blk > *:last-child { margin-bottom: 0; }
+  #preview.cols-2 > .blk, #preview.cols-3 > .blk { min-width: 0; }
   #preview.cols-2 .tweet-embed, #preview.cols-3 .tweet-embed {
     max-width: 100%;
     margin: 0;
   }
+  /* 1列のときはマス同士に間隔をあける（列表示では row-gap が効く） */
+  #preview:not(.cols-2):not(.cols-3) > .blk + .blk { margin-top: 14px; }
+
+  /* ─── ▲▼ 手動入れ替え（マウスを重ねたときだけ表示） ─── */
+  .blk-move {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 5;
+  }
+  .blk:hover .blk-move { display: flex; }
+  .blk-move button {
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text);
+    background: rgba(255,255,255,0.95);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  .blk-move button:hover { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+  /* スクショに写らないよう、撮影中は隠す。閲覧のみのときも出さない */
+  body.capturing .blk-move, body.readonly .blk-move { display: none !important; }
 
   /* ─── Bottom bar ─── */
   #bottom-bar {
@@ -559,6 +591,7 @@
     <button class="btn btn-outline" id="col1-btn" onclick="setColumns(1)" title="プレビューを1列（通常）で表示">1列</button>
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
+    <button class="btn btn-outline" id="arrange-btn" onclick="toggleArrange()" title="高さの近いツイートを同じ行に集めて余白を減らす（表示のみ・本文は変わりません）">整列</button>
     <span class="header-sep"></span>
     <button class="btn btn-outline btn-arrow" id="row-prev-btn" onclick="stepRow(-1)" title="前の行へ（←キー）">◀</button>
     <button class="btn btn-outline btn-arrow" id="row-next-btn" onclick="stepRow(1)" title="次の行へ（→キー）&#10;→ で送って Shift+P で撮影、の繰り返しで各行を撮れます">▶</button>
@@ -818,6 +851,7 @@ function isReadonly() { return !cfg.apiKey; }
 
 function applyReadonlyMode() {
   const ro = isReadonly();
+  document.body.classList.toggle('readonly', ro);
   document.getElementById('readonly-badge').style.display = ro ? '' : 'none';
   document.getElementById('new-page-btn').style.display   = ro ? 'none' : '';
   document.getElementById('empty-new-btn').style.display  = ro ? 'none' : '';
@@ -1248,7 +1282,15 @@ async function takeScreenshot() {
         return;
       }
     }
-    const frame = await grabFrame();
+    // ▲▼ が写り込まないよう隠してから撮る
+    document.body.classList.add('capturing');
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 60)));
+    let frame;
+    try {
+      frame = await grabFrame();
+    } finally {
+      document.body.classList.remove('capturing');
+    }
     const blob  = await captureAreaJpeg(frame, document.getElementById('editor-container'));
     if (frame.close) frame.close();          // ImageBitmap を解放
     await saveScreenshot(blob, title);
@@ -1566,14 +1608,17 @@ function rowOffsets() {
   const preview = document.getElementById('preview');
   // 内容の原点。これを基準にすると要素の位置がスクロール座標で出せる。
   const base = preview.getBoundingClientRect().top - preview.scrollTop;
-  const tops = [];
+  // 整列中は DOM の順番と見た目の順番が違うので、位置を集めてから並べ直す
+  const all = [];
   for (const el of preview.children) {
     const rect = el.getBoundingClientRect();
     if (rect.height === 0) continue;                 // 空行などは飛ばす
-    const top = Math.round(rect.top - base);
-    // 同じ高さから始まる要素は同じ行（多少のずれは許容）
-    if (!tops.length || top - tops[tops.length - 1] > 4) tops.push(top);
+    all.push(Math.round(rect.top - base));
   }
+  all.sort((a, b) => a - b);
+  // 同じ高さから始まる要素は同じ行（多少のずれは許容）
+  const tops = [];
+  for (const top of all) if (!tops.length || top - tops[tops.length - 1] > 4) tops.push(top);
   return tops;
 }
 
@@ -1614,57 +1659,155 @@ function renderPreview() {
   previewToken++;
   const raw = document.getElementById('editor').value;
   const images = getPage(currentPageId)?.images || {};
-  const html = markdownToHtml(raw, images);
   const preview = document.getElementById('preview');
+
+  stopArrangeWatch();
+  lastOrderKey = '';
   preview.style.paddingBottom = '';   // 行送りで足した余白をいったん戻す
-  preview.innerHTML = html;
+
+  // 「1マス＝1ブロック」で組み立てる。本文の切れ目とマスが1対1で対応するので、
+  // ▲▼ での入れ替えを本文にそのまま反映できる。
+  const blocks = splitBlocks(raw);
+  preview.innerHTML = blocks.map((b, i) =>
+    `<div class="blk" data-blk="${i}">${markdownToHtml(b, images)}` +
+    `<span class="blk-move">` +
+      `<button type="button" title="前へ" onclick="moveBlock(this,-1)">▲</button>` +
+      `<button type="button" title="後ろへ" onclick="moveBlock(this,1)">▼</button>` +
+    `</span></div>`
+  ).join('');
   preview.scrollTop = 0;              // 列を切り替えたら先頭から
-  if (columnCount > 1) groupForColumns(preview);
-  // Load tweet embeds
+
   embedTweets(preview);
+  applyArrange();
 }
 
-// 列表示用に、プレビューの中身を「1マス＝1ブロック」にまとめ直す。
-// ツイート・画像・段落はそれぞれ1マス、見出しは続く本文と同じマスに入れる。
-// 空行（<p></p>）はマスを消費せず区切りとして扱う。
-function groupForColumns(preview) {
-  const nodes = Array.from(preview.childNodes);
-  const frag = document.createDocumentFragment();
-  let group = null;
+// 本文を「1マス」単位に切り分ける。
+// ツイート・画像・段落はそれぞれ1マス、見出しは続く本文と同じマス、
+// 空行は区切り。ここで作った塊をそのまま並べ替えれば本文の並べ替えになる。
+function splitBlocks(md) {
+  const lines = md.split('\n');
+  const blocks = [];
+  let cur = null, fence = null;
 
-  const cell = () => {
-    const div = document.createElement('div');
-    div.className = 'col-item';
-    frag.appendChild(div);
-    return div;
-  };
-
-  for (const node of nodes) {
-    if (node.nodeType !== Node.ELEMENT_NODE) { node.remove(); continue; }
-    const tag = node.tagName.toLowerCase();
-
-    // 空行 → 区切り（マスは作らない）
-    if (tag === 'p' && !node.innerHTML.trim()) { group = null; node.remove(); continue; }
-
-    // ツイート・区切り線は必ず単独のマス
-    if (node.classList.contains('tweet-embed') || tag === 'hr') {
-      group = null;
-      cell().appendChild(node);
+  for (const line of lines) {
+    // コードブロックの中は丸ごとひとつの塊として扱う
+    if (fence !== null) {
+      fence.push(line);
+      if (line.trim().startsWith('```')) { blocks.push(fence.join('\n')); fence = null; }
       continue;
     }
+    if (line.trim().startsWith('```')) { cur = null; fence = [line]; continue; }
 
-    // 見出しは新しいマスを開き、続く本文を同じマスに入れる
-    if (/^h[1-3]$/.test(tag)) {
-      group = cell();
-      group.appendChild(node);
-      continue;
-    }
+    if (!line.trim()) { cur = null; continue; }                       // 空行 = 区切り
 
-    (group || cell()).appendChild(node);
+    const isTweet = /^https?:\/\/(twitter\.com|x\.com)\/\S+\/status\/\d+/.test(line.trim());
+    const isHr    = /^[-*]{3,}$/.test(line.trim());
+    if (isTweet || isHr) { blocks.push(line); cur = null; continue; } // 単独のマス
+
+    if (/^#{1,3}\s+/.test(line)) { cur = [line]; blocks.push(cur); continue; }  // 見出しで新しいマス
+
+    if (cur && Array.isArray(cur)) cur.push(line);
+    else { cur = [line]; blocks.push(cur); }
+  }
+  if (fence) blocks.push(fence.join('\n'));
+
+  return blocks.map(b => Array.isArray(b) ? b.join('\n') : b);
+}
+
+// ─── 高さ順の自動整列 ────────────────────────────────
+// 行の高さはその行で一番高いツイートで決まるので、高さの近いもの同士を
+// 同じ行に集めると余白が減る。高い順に並べて n 個ずつ区切るのが、
+// 行内のばらつき（＝余白の合計）を最小にする並べ方。
+// 本文は変えず、CSS の order で見た目だけ入れ替える。
+let autoArrange = false;
+let arrangeObserver = null;
+let arrangeTimer = null;
+let lastOrderKey = '';
+
+function toggleArrange() {
+  autoArrange = !autoArrange;
+  document.getElementById('arrange-btn').classList.toggle('active', autoArrange);
+  lastOrderKey = '';
+  applyArrange();
+  setStatus(autoArrange ? '高さ順に整列しました' : '元の順番に戻しました');
+}
+
+function applyArrange() {
+  const preview = document.getElementById('preview');
+  const items = Array.from(preview.querySelectorAll(':scope > .blk'));
+  if (!items.length) return;
+
+  if (!autoArrange || columnCount < 2) {
+    stopArrangeWatch();
+    for (const el of items) el.style.order = '';
+    lastOrderKey = '';
+    return;
   }
 
-  preview.textContent = '';   // 移動しきれなかった残りを掃除
-  preview.appendChild(frag);
+  const ranked = items
+    .map((el, i) => ({ el, i, h: el.getBoundingClientRect().height }))
+    .sort((a, b) => b.h - a.h || a.i - b.i);
+
+  // 並びが変わっていなければ触らない（監視との往復を避ける）
+  const key = ranked.map(r => r.i).join(',');
+  if (key !== lastOrderKey) {
+    ranked.forEach((r, pos) => { r.el.style.order = pos; });
+    lastOrderKey = key;
+  }
+  startArrangeWatch(items);
+}
+
+// ツイートは読み込み終わってから高さが決まるので、変化を見て並べ直す
+function startArrangeWatch(items) {
+  if (arrangeObserver || !window.ResizeObserver) return;
+  arrangeObserver = new ResizeObserver(() => {
+    clearTimeout(arrangeTimer);
+    arrangeTimer = setTimeout(() => {
+      if (autoArrange && columnCount > 1) applyArrange();
+    }, 300);
+  });
+  for (const el of items) arrangeObserver.observe(el);
+}
+
+function stopArrangeWatch() {
+  if (arrangeObserver) { arrangeObserver.disconnect(); arrangeObserver = null; }
+  clearTimeout(arrangeTimer);
+}
+
+// ─── ▲▼ で手動入れ替え ───────────────────────────────
+// 表示されている順番を基準に、前後のマスと入れ替えて本文に反映する。
+function moveBlock(btn, dir) {
+  const el = btn.closest('.blk');
+  const preview = document.getElementById('preview');
+  const editor = document.getElementById('editor');
+  if (!el || editor.readOnly) return;
+
+  // 見えている順番（整列中は order が付いている）
+  const shown = Array.from(preview.querySelectorAll(':scope > .blk'))
+    .sort((a, b) => (parseInt(a.style.order) || 0) - (parseInt(b.style.order) || 0));
+  const from = shown.indexOf(el);
+  const to = from + dir;
+  if (from < 0 || to < 0 || to >= shown.length) return;
+
+  // 本文を「見えている順番」に組み直してから入れ替える。
+  // これで整列中でも見たまま動かせる。
+  const blocks = splitBlocks(editor.value);
+  const reordered = shown.map(s => blocks[Number(s.dataset.blk)]);
+  [reordered[from], reordered[to]] = [reordered[to], reordered[from]];
+  editor.value = reordered.join('\n\n');
+
+  // 手で動かしたあとに自動整列が効くと元に戻ってしまうので解除する
+  const wasArranged = autoArrange;
+  if (wasArranged) {
+    autoArrange = false;
+    document.getElementById('arrange-btn').classList.remove('active');
+  }
+
+  markDirty();
+  renderPreview();
+  setStatus(wasArranged
+    ? '整列した順番を本文に反映し、入れ替えました（保存で確定）'
+    : '順番を入れ替えました（保存で確定）');
 }
 
 // ─── Markdown parser (lightweight) ───────────────────
