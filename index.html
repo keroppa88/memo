@@ -1638,20 +1638,41 @@ function stepRow(dir) {
   const tops = rowOffsets();
   if (tops.length < 2) return;
 
-  // いま先頭に来ている行を探す。
   // 余白を足すと一瞬スクロール位置が動くので、その前に控えておく。
   const cur = preview.scrollTop;
-  let idx = 0;
-  for (let i = 0; i < tops.length; i++) if (tops[i] <= cur + ROW_SNAP) idx = i;
+
+  // 現在行は覚えておいた値を使う。
+  // 行の位置は小数になることがあり、スクロール位置と突き合わせる方式だと
+  // 1px のずれで同じ行に留まり続けてしまうため。
+  // 手でスクロールされて記録とずれている場合だけ、位置から取り直す。
+  let idx = currentRow;
+  if (idx >= tops.length || Math.abs(tops[idx] - ROW_SNAP - cur) > ROW_TOL) {
+    idx = 0;
+    for (let i = 0; i < tops.length; i++) if (tops[i] <= cur + ROW_SNAP + ROW_TOL) idx = i;
+  }
 
   ensureRowScrollRoom(preview, tops);
   const next = Math.min(tops.length - 1, Math.max(0, idx + dir));
+  currentRow = next;
+
   // 撮影と続けて使うので、なめらかスクロールにはしない（途中が写る）
-  preview.scrollTop = Math.max(0, tops[next] - ROW_SNAP);
+  const target = Math.max(0, tops[next] - ROW_SNAP);
+  preview.scrollTop = target;
+
+  // 端で切り詰められて届かなかったときは、その分だけ余白を足して届かせる
+  const short = target - preview.scrollTop;
+  if (short > 1) {
+    const pad = parseFloat(preview.style.paddingBottom) || 0;
+    preview.style.paddingBottom = Math.ceil(pad + short) + 'px';
+    preview.scrollTop = target;
+  }
+
   setStatus(`${next + 1} / ${tops.length} 行目`);
 }
 
-const ROW_SNAP = 8;   // 行の上に少しだけ余白を残す
+const ROW_SNAP = 8;    // 行の上に少しだけ余白を残す
+const ROW_TOL  = 12;   // 行位置の小数・丸めのぶんの許容
+let currentRow = 0;    // いま先頭に来ている行
 
 let previewToken = 0;   // 描画のたびに増やし、前回の埋め込み処理を無効化する
 
@@ -1663,6 +1684,7 @@ function renderPreview() {
 
   stopArrangeWatch();
   lastOrderKey = '';
+  currentRow = 0;
   preview.style.paddingBottom = '';   // 行送りで足した余白をいったん戻す
 
   // 「1マス＝1ブロック」で組み立てる。本文の切れ目とマスが1対1で対応するので、
