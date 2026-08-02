@@ -63,6 +63,15 @@
   #header-actions::-webkit-scrollbar { display: none; }
   #header-actions > .btn { flex-shrink: 0; }
 
+  .btn-arrow { padding: 7px 10px; font-size: 12px; }
+
+  .header-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
   #readonly-badge {
     font-size: 11px;
     padding: 3px 8px;
@@ -550,6 +559,10 @@
     <button class="btn btn-outline" id="col1-btn" onclick="setColumns(1)" title="プレビューを1列（通常）で表示">1列</button>
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
+    <span class="header-sep"></span>
+    <button class="btn btn-outline btn-arrow" id="row-prev-btn" onclick="stepRow(-1)" title="前の行へ（←キー）">◀</button>
+    <button class="btn btn-outline btn-arrow" id="row-next-btn" onclick="stepRow(1)" title="次の行へ（→キー）&#10;→ で送って Shift+P で撮影、の繰り返しで各行を撮れます">▶</button>
+    <span class="header-sep"></span>
     <button class="btn btn-outline" id="screenshot-btn" onclick="takeScreenshot()" title="ページ表示領域をスクショしてデスクトップの memophoto フォルダに保存（JPG 画質90%）&#10;ショートカット: Shift+P">📷 スクショ</button>
     <button class="btn btn-outline" id="download-btn" onclick="downloadPage()" title="このページをMarkdownでダウンロード">⬇ MD</button>
     <button class="btn btn-outline" id="download-html-btn" onclick="downloadPageHtml()" title="このページをHTMLでダウンロード（ツイート埋め込み・画像を保持）">⬇ HTML</button>
@@ -1574,7 +1587,8 @@ function ensureRowScrollRoom(preview, tops) {
 }
 
 function stepRow(dir) {
-  if (currentMode !== 'preview') return;
+  // ボタンから編集中に押された場合は、まずプレビューへ切り替える
+  if (currentMode !== 'preview') { setMode('preview'); return; }
   const preview = document.getElementById('preview');
   const tops = rowOffsets();
   if (tops.length < 2) return;
