@@ -794,15 +794,17 @@ async function shrinkImageDataUrl(dataUrl, maxWidth = cfg.imgWidth) {
 
 // 指定幅より大きい画像がいくつ残っているか調べる
 function describeOversizedImages() {
-  let count = 0, bytes = 0;
+  let count = 0, imgBytes = 0;
   for (const page of wikiData.pages || []) {
     for (const dataUrl of Object.values(page.images || {})) {
       count++;
-      bytes += dataUrl.length;
+      imgBytes += dataUrl.length;
     }
   }
-  if (!count) return '保存されている画像はありません。';
-  return `いま画像 ${count} 枚・約 ${formatSize(bytes)} を保存しています。`;
+  const total = byteSize(JSON.stringify(wikiData));
+  if (!count) return `全体で ${formatSize(total)}。画像はありません。`;
+  return `画像 ${count} 枚で約 ${formatSize(imgBytes)}、全体で ${formatSize(total)}。`
+    + `1枚あたり平均 ${formatSize(Math.round(imgBytes / count))}。`;
 }
 
 // 既にある画像をまとめて今の幅に揃える。元に戻せないので、
@@ -968,8 +970,7 @@ async function pollUpdate() {
     const res = await fetch(`${GIST_API}/${cfg.binId}?_=${Date.now()}`, { headers: readHeaders() });
     if (!res.ok) return;
     const json = await res.json();
-    const raw = await gistContent(json?.files?.[GIST_FILE]);
-    const fresh = parseGistData(raw);
+    const fresh = await assembleFromGist(json);
     if (!fresh || !Array.isArray(fresh.pages)) return;
 
     // 変化がなければ何もしない
@@ -1040,6 +1041,116 @@ async function fetchWithRetry(url, options, maxRetries = 3, retryOnNetworkError 
   throw lastErr || new Error('通信に失敗しました');
 }
 
+// ─── Gist のファイル分割 ─────────────────────────────
+// 全部を wiki.json 1枚に入れると、文章を1文字直しただけでも画像ごと
+// 送り直すことになる。本文と画像を別ファイルに分け、変わったファイルだけ
+// 送るようにする。Gist の PATCH は複数ファイルを1リクエストで更新するので、
+// 途中まで保存された状態にはならない。
+// 1ファイルは 900KB 未満に抑える。GitHub は 1MB を超えたファイルの中身を
+// そのまま返さないので、下回っていれば読み込みが1往復で済む。
+// 画像を1枚足し引きしたときに送り直す量も、この大きさで頭打ちになる。
+const IMAGES_PER_SHARD = 50;                 // 1ファイルに入れる画像の枚数
+const SHARD_MAX_BYTES  = 900 * 1024;         // 1ファイルの大きさの上限
+const SHARD_RE = /^images-(\d+)\.json$/;
+
+// 最後に Gist へ書いた（＝Gist に入っている）各ファイルの中身。
+// これと比べて、変わったファイルだけ送る。
+let lastSavedFiles = {};
+
+function imgKey(pageId, imgId) { return `${pageId}/${imgId}`; }
+
+function splitImgKey(key) {
+  const i = key.indexOf('/');
+  return i < 0 ? null : { pageId: key.slice(0, i), imgId: key.slice(i + 1) };
+}
+
+// いまの wikiData から、Gist に置くファイル一式を組み立てる。
+// 画像の配置（どのファイルに入れるか）は一度決めたら動かさない。
+// 動かすと、無関係な画像ファイルまで毎回送り直すことになるため。
+function buildGistFiles() {
+  const urls = {};
+  for (const page of wikiData.pages || []) {
+    for (const [imgId, url] of Object.entries(page.images || {})) urls[imgKey(page.id, imgId)] = url;
+  }
+
+  const index = {};
+  const prev = wikiData.imageIndex || {};
+  for (const [key, n] of Object.entries(prev)) {
+    if (key in urls && Number.isInteger(n)) index[key] = n;   // 消えた画像は引き継がない
+  }
+
+  // ファイルごとの中身を作りつつ、未割り当ての画像を空きに詰める
+  const shards = new Map();
+  const shard = n => { if (!shards.has(n)) shards.set(n, {}); return shards.get(n); };
+  for (const [key, n] of Object.entries(index)) shard(n)[key] = urls[key];
+
+  const bytesOf = new Map();
+  for (const [n, obj] of shards) bytesOf.set(n, JSON.stringify(obj).length);
+
+  for (const key of Object.keys(urls)) {
+    if (key in index) continue;
+    const size = urls[key].length;
+    let target = null;
+    for (let n = 1; ; n++) {
+      const obj = shard(n);
+      const count = Object.keys(obj).length;
+      const bytes = bytesOf.get(n) || 2;
+      if (count < IMAGES_PER_SHARD && (count === 0 || bytes + size <= SHARD_MAX_BYTES)) { target = n; break; }
+    }
+    shard(target)[key] = urls[key];
+    index[key] = target;
+    bytesOf.set(target, (bytesOf.get(target) || 2) + size);
+  }
+
+  wikiData.imageIndex = index;
+
+  // 本文側には画像を入れない
+  const text = {
+    pages: (wikiData.pages || []).map(p => ({ id: p.id, title: p.title, content: p.content })),
+    imageIndex: index
+  };
+
+  const files = { [GIST_FILE]: JSON.stringify(text) };
+  for (const [n, obj] of shards) {
+    if (Object.keys(obj).length) files[`images-${n}.json`] = JSON.stringify(obj);
+  }
+  return files;
+}
+
+// Gist の応答からページと画像を組み立てる。
+// 画像が wiki.json に入ったままの旧形式もそのまま読める。
+async function assembleFromGist(json) {
+  const raw = await gistContent(json?.files?.[GIST_FILE]);
+  const data = parseGistData(raw);
+  if (!data) return null;
+  if (!Array.isArray(data.pages)) data.pages = [];
+
+  const files = json?.files || {};
+  const shardNames = Object.keys(files)
+    .filter(n => SHARD_RE.test(n))
+    .sort((a, b) => Number(a.match(SHARD_RE)[1]) - Number(b.match(SHARD_RE)[1]));
+
+  const seen = { [GIST_FILE]: raw };
+  const byPage = {};
+  for (const name of shardNames) {
+    const content = await gistContent(files[name]);
+    seen[name] = content;
+    const obj = parseGistData(content);
+    if (!obj) continue;
+    for (const [key, url] of Object.entries(obj)) {
+      const k = splitImgKey(key);
+      if (!k) continue;
+      (byPage[k.pageId] = byPage[k.pageId] || {})[k.imgId] = url;
+    }
+  }
+  for (const page of data.pages) {
+    page.images = { ...(page.images || {}), ...(byPage[page.id] || {}) };
+  }
+  // 旧形式（画像が wiki.json の中）から来た場合は次の保存で分割される
+  lastSavedFiles = seen;
+  return data;
+}
+
 async function gistContent(fileObj) {
   if (!fileObj) return null;
   if (fileObj.truncated && fileObj.raw_url) {
@@ -1077,15 +1188,11 @@ async function loadFromBin() {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    const fileObj = json?.files?.[GIST_FILE];
-    console.log('[wiki] loadFromBin: file keys =', Object.keys(json?.files || {}), '/ truncated =', fileObj?.truncated);
-    const raw = await gistContent(fileObj);
-    console.log('[wiki] loadFromBin: raw length =', raw?.length, '/ preview =', raw?.slice(0, 80));
-    const data = parseGistData(raw);
+    console.log('[wiki] loadFromBin: file keys =', Object.keys(json?.files || {}));
+    const data = await assembleFromGist(json);
     console.log('[wiki] loadFromBin: parsed pages =', data?.pages?.length ?? 'null');
     if (!data) throw new Error(`データの解析に失敗しました (Gist ID: ${cfg.binId})`);
     wikiData = data;
-    if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
     setStatus('読み込み完了', false);
   } catch (e) {
     console.error('[wiki] loadFromBin error:', e);
@@ -1095,14 +1202,16 @@ async function loadFromBin() {
 
 // Gist の容量。1MB は「API の応答が truncated になる」閾値で、書き込みの
 // 上限ではない（超えた分は raw_url から読み直すので保存自体は通る）。
-// ただし 10MB を超えると raw_url でも読めず git clone が必要になり、
-// このアプリからは二度と読み出せなくなるので、そこだけは送信前に止める。
-const GIST_HARD_BYTES = 10 * 1024 * 1024;   // これを超えると読み出せなくなる
+// 10MB を超えると、文書上は raw_url でも読めなくなるとされている。
+// ただし実際にはそれ以上でも読み書きできている例があるため、こちらでは
+// 拒否せず確認だけ出す。保存できないより、確認して進める方がよい。
+const GIST_HARD_BYTES = 10 * 1024 * 1024;   // これを超えたら確認を出す
 const GIST_WARN_BYTES = 1024 * 1024;        // これを超えると読み込みが1往復増える
 
 function byteSize(str) { return new TextEncoder().encode(str).length; }
 
 function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
   return bytes >= 1024 * 1024
     ? (bytes / 1024 / 1024).toFixed(2) + ' MB'
     : Math.round(bytes / 1024) + ' KB';
@@ -1136,7 +1245,7 @@ function saveErrorHint(status, message, bytes) {
     ? 'API のレート制限に達しました — しばらく待ってから保存してください'
     : 'Token の権限が足りません — gist スコープ付きのトークンが必要です';
   if (status === 409) return '他の端末の保存と競合しました — 再読み込みしてからやり直してください';
-  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。画像を減らすか、履歴保持数を小さくしてください`;
+  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。設定の「これまでの画像も今の幅に揃える」を試してください`;
   if (status >= 500) return `GitHub 側の障害です (HTTP ${status}) — 少し待ってから保存してください`;
   return message || `HTTP ${status}`;
 }
@@ -1145,6 +1254,7 @@ function saveErrorHint(status, message, bytes) {
 // 同じ Gist への PATCH が競合して失敗するので、走るのは常に 1 本だけにする。
 let saveChain   = Promise.resolve(false);
 let queuedSaves = 0;
+let confirmedOversize = false;   // 容量の確認は一度だけ
 
 function saveToBin() {
   // 実行中の保存の後に走る保存が既に予約済みなら、それが最新の wikiData を
@@ -1168,14 +1278,41 @@ async function doSaveToBin() {
   (wikiData.pages || []).forEach(page => { delete page.history; });
   (wikiData.pages || []).forEach(pruneUnusedImages);
 
-  const content = JSON.stringify(wikiData);
-  const bytes = byteSize(content);
-  console.log('[wiki] saveToBin: binId =', cfg.binId, '/ pages =', wikiData.pages?.length, '/ size =', formatSize(bytes));
-  const files = { [GIST_FILE]: { content } };
+  const built = buildGistFiles();
+  const total = Object.values(built).reduce((n, c) => n + byteSize(c), 0);
+
+  // 変わったファイルだけ送る。本文だけ直したときは wiki.json しか動かない。
+  const files = {};
+  for (const [name, content] of Object.entries(built)) {
+    if (lastSavedFiles[name] !== content) files[name] = { content };
+  }
+  // 空になった画像ファイルは Gist から消す
+  for (const name of Object.keys(lastSavedFiles)) {
+    if (SHARD_RE.test(name) && !(name in built)) files[name] = null;
+  }
+  const bytes = Object.values(files).reduce((n, f) => n + (f ? byteSize(f.content) : 0), 0);
+  console.log('[wiki] saveToBin: binId =', cfg.binId, '/ pages =', wikiData.pages?.length,
+              '/ 全体 =', formatSize(total), '/ 送信 =', formatSize(bytes),
+              '/ files =', Object.keys(files).join(', ') || 'なし');
+
+  if (cfg.binId && !Object.keys(files).length) {
+    dirty = false;
+    clearDraft();
+    setStatus('変更なし — ' + new Date().toLocaleTimeString('ja-JP'));
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存';
+    return true;
+  }
 
   try {
-    if (bytes > GIST_HARD_BYTES) {
-      throw new Error(`データが ${formatSize(bytes)} で Gist の 10MB を超えます — このまま保存すると読み出せなくなるため中止しました。画像を減らすか、履歴保持数を小さくしてください`);
+    if (total > GIST_HARD_BYTES && !confirmedOversize) {
+      const msg = `データが ${formatSize(total)} あります（Gist の目安は 10MB）。\n`
+        + `このまま保存すると、あとで読み出せなくなる可能性があります。\n\n`
+        + `設定の「これまでの画像も今の幅に揃える」で大きく減らせます。\n\n`
+        + `このまま保存しますか？`;
+      if (!confirm(msg)) throw new Error(`保存を中止しました（${formatSize(total)}）`);
+      // 一度確認したらこのセッションでは聞き直さない
+      confirmedOversize = true;
     }
     if (!cfg.binId) {
       // 新規 Gist 作成（通信エラーでの再送は Gist が二重にできるので行わない）
@@ -1186,6 +1323,7 @@ async function doSaveToBin() {
       }, 3, false);
       if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
       const j = await res.json();
+      lastSavedFiles = { ...built };
       cfg.binId = j.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
       document.getElementById('cfg-binid').value = cfg.binId;
@@ -1204,13 +1342,13 @@ async function doSaveToBin() {
         return doSaveToBin();
       }
       if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
+      lastSavedFiles = { ...built };
     }
     dirty = false;
     clearDraft();
-    setStatus(bytes > GIST_WARN_BYTES
-      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} — 1MB を超えたので読み込みが少し遅くなります）`
-      : '保存済み — ' + new Date().toLocaleTimeString('ja-JP'),
-      bytes > GIST_WARN_BYTES);
+    // 大きくなってきた時だけ内訳を出す
+    setStatus(`保存済み — ${new Date().toLocaleTimeString('ja-JP')}`
+      + (total > GIST_WARN_BYTES ? `（送信 ${formatSize(bytes)} / 全体 ${formatSize(total)}）` : ''));
     return true;
   } catch (e) {
     saveDraft();   // 失敗した編集内容をこの端末に退避しておく
