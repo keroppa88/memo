@@ -631,6 +631,9 @@
       <input type="number" id="cfg-imgwidth" min="200" max="2000" step="50" value="600">
       <div class="hint">貼り付けた画像はこの幅に揃えて保存されます。容量のほとんどは画像なので、小さいほど保存が軽くなります。</div>
       <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="shrinkAllImages()" id="shrink-all-btn">🖼 これまでの画像も今の幅に揃える</button>
+      <div class="hint" style="margin-top:4px;">押すと先に現在のデータを memo-backup-日時.json に書き出します。縮小は元に戻せないので、そのファイルが戻し道になります。</div>
+      <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="document.getElementById('restore-file').click()">↩ バックアップから復元</button>
+      <input type="file" id="restore-file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])restoreBackup(this.files[0]);this.value=''">
       <div id="shrink-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
     </div>
     <div class="modal-actions">
@@ -825,7 +828,13 @@ async function shrinkAllImages() {
   if (!confirm(`画像 ${targets.length} 枚を幅 ${width}px に揃えます。\n元の画質には戻せません。\n\n実行前に現在のデータをバックアップとして保存します。よろしいですか？`)) return;
 
   btn.disabled = true;
-  downloadBackup();
+  btn.textContent = 'バックアップを保存中…';
+  if (!await downloadBackup()) {
+    btn.textContent = '🖼 これまでの画像も今の幅に揃える';
+    btn.disabled = false;
+    hint.textContent = 'バックアップを保存しなかったので中止しました。';
+    return;
+  }
 
   let done = 0;
   for (const t of targets) {
@@ -844,16 +853,66 @@ async function shrinkAllImages() {
   if (currentMode === 'preview') renderPreview();
 }
 
-// 変換前のデータをファイルに落としておく
-function downloadBackup() {
-  const blob = new Blob([JSON.stringify(wikiData)], { type: 'application/json' });
+// 現在のデータをまるごとファイルに書き出す。
+// 縮小は元に戻せないので、これが唯一の戻し道になる。
+// 保存できたかどうかを返す（キャンセルされたら false）。
+async function downloadBackup() {
+  const json = JSON.stringify(wikiData);
+  const name = `memo-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.json`;
+
+  // 保存ダイアログの結果が分かる方（Chrome / Edge）を優先する。
+  // キャンセルされたのに処理を進めてしまうと、戻し道がないまま変換される。
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'メモのバックアップ', accept: { 'application/json': ['.json'] } }]
+      });
+      const w = await handle.createWritable();
+      await w.write(json);
+      await w.close();
+      return true;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;   // キャンセル
+      console.warn('[wiki] バックアップの保存に失敗、ダウンロードに切り替えます:', e);
+    }
+  }
+
+  // 非対応ブラウザはダウンロードに落とす。こちらは結果が分からないので
+  // 保存できたか本人に確かめる。
+  const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `memo-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.json`;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  return confirm(`${name} をダウンロードしました。\n保存できていることを確かめてから「OK」を押してください。\n\n（キャンセルすると縮小せずに中止します）`);
+}
+
+// バックアップした JSON を読み込んで元に戻す
+async function restoreBackup(file) {
+  const hint = document.getElementById('shrink-hint');
+  const text = await file.text();
+  const data = parseGistData(text);
+  if (!data || !Array.isArray(data.pages)) {
+    hint.textContent = '読み込めませんでした。メモのバックアップ（.json）を選んでください。';
+    return;
+  }
+  const count = data.pages.reduce((n, p) => n + Object.keys(p.images || {}).length, 0);
+  if (!confirm(`${file.name}\n\nページ ${data.pages.length} 件・画像 ${count} 枚。\n`
+    + `いま開いている内容をこれで置き換えます。よろしいですか？\n\n`
+    + `（「保存」を押すまで Gist には反映されません）`)) return;
+
+  wikiData = data;
+  if (!Array.isArray(wikiData.pages)) wikiData.pages = [];
+  currentPageId = null;
+  dirty = true;
+  renderPageList();
+  showEmpty();
+  closeSettings();
+  setStatus(`${file.name} から復元しました — 保存を押すと確定します`, true);
 }
 
 // ─── Config ──────────────────────────────────────────
