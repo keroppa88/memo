@@ -423,11 +423,6 @@
     color: var(--text-muted);
   }
 
-  #history-btn {
-    font-size: 12px;
-    padding: 5px 10px;
-  }
-
   /* ─── Empty state ─── */
   #empty-state {
     flex: 1;
@@ -492,35 +487,6 @@
     gap: 8px;
     justify-content: flex-end;
     margin-top: 16px;
-  }
-
-  /* History list */
-  #history-list {
-    max-height: 320px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-  }
-
-  .history-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .history-item:last-child { border-bottom: none; }
-  .history-item:hover { background: var(--bg); }
-  .history-meta { color: var(--text-muted); font-size: 11px; }
-  .history-preview {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-    font-size: 12px;
   }
 
   /* Loading spinner */
@@ -638,7 +604,6 @@
       </div>
       <div id="bottom-bar">
         <span id="status-msg">変更なし</span>
-        <button class="btn btn-outline history-btn" id="history-btn" onclick="openHistory()">📋 履歴</button>
         <button class="btn btn-primary" id="save-btn" onclick="savePage()">保存</button>
       </div>
     </div>
@@ -662,8 +627,11 @@
       <div class="hint">入力すると書き込み可能になります。非公開 Gist（デフォルト）の閲覧にも Token が必要です。</div>
     </div>
     <div class="field">
-      <label>履歴保持件数</label>
-      <input type="number" id="cfg-histmax" min="5" max="100" value="20">
+      <label>画像の幅（px）</label>
+      <input type="number" id="cfg-imgwidth" min="200" max="2000" step="50" value="600">
+      <div class="hint">貼り付けた画像はこの幅に揃えて保存されます。容量のほとんどは画像なので、小さいほど保存が軽くなります。</div>
+      <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="shrinkAllImages()" id="shrink-all-btn">🖼 これまでの画像も今の幅に揃える</button>
+      <div id="shrink-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeSettings()">キャンセル</button>
@@ -688,16 +656,6 @@
   </div>
 </div>
 
-<!-- History Modal -->
-<div class="modal-overlay" id="history-modal">
-  <div class="modal">
-    <h2>📋 編集履歴</h2>
-    <div id="history-list"></div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeHistory()">閉じる</button>
-    </div>
-  </div>
-</div>
 
 <!-- Delete Confirm Modal -->
 <div class="modal-overlay" id="delete-modal">
@@ -717,9 +675,9 @@
 // ─── State ───────────────────────────────────────────
 const GIST_API = 'https://api.github.com/gists';
 const GIST_FILE = 'wiki.json';
-let cfg = { apiKey: '', binId: '', histMax: 20 };
+let cfg = { apiKey: '', binId: '', imgWidth: 600 };
 let readKey = ''; // 未使用（公開Gistは認証不要）
-let wikiData = { pages: [] };  // { pages: [{id, title, content, history:[{ts,content}]}] }
+let wikiData = { pages: [] };  // { pages: [{id, title, content, images:{id:dataUrl}}] }
 let currentPageId = null;
 let dirty = false;
 let deleteTargetId = null;
@@ -758,8 +716,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         e.preventDefault();
         const file = item.getAsFile();
         const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target.result;
+        reader.onload = async (ev) => {
+          // どの画像も同じ幅で表示するので、貼り付けた時点で縮めて持つ
+          const dataUrl = await shrinkImageDataUrl(ev.target.result);
           const page = getPage(currentPageId);
           if (!page) return;
           if (!page.images) page.images = {};
@@ -781,6 +740,120 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
+// ─── 画像の縮小 ──────────────────────────────────────
+// 表示幅はどの画像も同じなので、その幅に必要な解像度だけ残せばよい。
+// 容量のほとんどは画像（データURL）なので、ここが効く。
+const IMG_WIDTH_DEFAULT = 600;
+const IMG_QUALITY = 0.82;
+
+function clampImgWidth(v) {
+  const n = parseInt(v);
+  if (!n || Number.isNaN(n)) return IMG_WIDTH_DEFAULT;
+  return Math.min(2000, Math.max(200, n));
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    img.src = dataUrl;
+  });
+}
+
+// 指定幅に縮めて JPEG 化する。読めない画像や、既に十分小さくて
+// JPEG にすると太るだけの画像はそのまま返す。
+async function shrinkImageDataUrl(dataUrl, maxWidth = cfg.imgWidth) {
+  let img;
+  try { img = await loadImage(dataUrl); } catch { return dataUrl; }
+
+  const scale = Math.min(1, maxWidth / (img.naturalWidth || maxWidth));
+  const w = Math.max(1, Math.round((img.naturalWidth  || maxWidth) * scale));
+  const h = Math.max(1, Math.round((img.naturalHeight || maxWidth) * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  // JPEG は透過を黒く塗るので白を敷いてから描く
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+
+  // 写真は JPEG、文字やUIのスクショは WebP / PNG が小さくなる。
+  // 中身で決め打ちせず、実際に符号化して一番小さいものを採る。
+  const candidates = [canvas.toDataURL('image/jpeg', IMG_QUALITY), canvas.toDataURL('image/png')];
+  const webp = canvas.toDataURL('image/webp', IMG_QUALITY);
+  // 非対応ブラウザは PNG を返してくるので、WebP になった時だけ候補に入れる
+  if (webp.startsWith('data:image/webp')) candidates.push(webp);
+  const out = candidates.reduce((a, b) => (b.length < a.length ? b : a));
+
+  // 縮小が要らなかった（元から指定幅以下）のに太るなら元のまま
+  if (scale === 1 && out.length >= dataUrl.length) return dataUrl;
+  return out;
+}
+
+// 指定幅より大きい画像がいくつ残っているか調べる
+function describeOversizedImages() {
+  let count = 0, bytes = 0;
+  for (const page of wikiData.pages || []) {
+    for (const dataUrl of Object.values(page.images || {})) {
+      count++;
+      bytes += dataUrl.length;
+    }
+  }
+  if (!count) return '保存されている画像はありません。';
+  return `いま画像 ${count} 枚・約 ${formatSize(bytes)} を保存しています。`;
+}
+
+// 既にある画像をまとめて今の幅に揃える。元に戻せないので、
+// 実行前に現在のデータをファイルに書き出しておく。
+async function shrinkAllImages() {
+  const btn  = document.getElementById('shrink-all-btn');
+  const hint = document.getElementById('shrink-hint');
+  if (isReadonly()) { alert('編集するには GitHub Token が必要です'); return; }
+
+  const width = clampImgWidth(document.getElementById('cfg-imgwidth').value);
+  const targets = [];
+  for (const page of wikiData.pages || []) {
+    for (const id of Object.keys(page.images || {})) targets.push({ page, id });
+  }
+  if (!targets.length) { hint.textContent = '縮小できる画像がありません。'; return; }
+
+  const before = targets.reduce((n, t) => n + t.page.images[t.id].length, 0);
+  if (!confirm(`画像 ${targets.length} 枚を幅 ${width}px に揃えます。\n元の画質には戻せません。\n\n実行前に現在のデータをバックアップとして保存します。よろしいですか？`)) return;
+
+  btn.disabled = true;
+  downloadBackup();
+
+  let done = 0;
+  for (const t of targets) {
+    btn.textContent = `変換中… ${++done}/${targets.length}`;
+    t.page.images[t.id] = await shrinkImageDataUrl(t.page.images[t.id], width);
+  }
+
+  const after = targets.reduce((n, t) => n + t.page.images[t.id].length, 0);
+  btn.textContent = '🖼 これまでの画像も今の幅に揃える';
+  btn.disabled = false;
+  hint.textContent = `${targets.length} 枚を変換: ${formatSize(before)} → ${formatSize(after)}。保存すると確定します。`;
+
+  cfg.imgWidth = width;
+  localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
+  if (await saveToBin()) hint.textContent += ' 保存しました。';
+  if (currentMode === 'preview') renderPreview();
+}
+
+// 変換前のデータをファイルに落としておく
+function downloadBackup() {
+  const blob = new Blob([JSON.stringify(wikiData)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `memo-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
 // ─── Config ──────────────────────────────────────────
 
 function loadConfig() {
@@ -788,14 +861,15 @@ function loadConfig() {
     const s = JSON.parse(localStorage.getItem('wiki_cfg') || '{}');
     cfg.apiKey  = s.apiKey  || '';
     cfg.binId   = s.binId   || '';
-    cfg.histMax = s.histMax || 20;
+    cfg.imgWidth = s.imgWidth || IMG_WIDTH_DEFAULT;
   } catch {}
 }
 
 function openSettings() {
   document.getElementById('cfg-apikey').value = cfg.apiKey;
   document.getElementById('cfg-binid').value  = cfg.binId;
-  document.getElementById('cfg-histmax').value = cfg.histMax;
+  document.getElementById('cfg-imgwidth').value = cfg.imgWidth;
+  document.getElementById('shrink-hint').textContent = describeOversizedImages();
   document.getElementById('settings-modal').classList.add('open');
 }
 
@@ -837,7 +911,7 @@ function copyShareUrl() {
 async function saveSettings() {
   cfg.binId   = document.getElementById('cfg-binid').value.trim();
   cfg.apiKey  = document.getElementById('cfg-apikey').value.trim();
-  cfg.histMax = parseInt(document.getElementById('cfg-histmax').value) || 20;
+  cfg.imgWidth = clampImgWidth(document.getElementById('cfg-imgwidth').value);
   localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
   closeSettings();
   applyReadonlyMode();
@@ -1019,10 +1093,12 @@ async function loadFromBin() {
   }
 }
 
-// Gist の 1 ファイルは 1MB を超えると API から書き込めない。
-// 画像（データURL）と履歴で膨らむので、超える前に気づけるようにする。
-const GIST_MAX_BYTES  = 1024 * 1024;
-const GIST_WARN_BYTES = 800 * 1024;
+// Gist の容量。1MB は「API の応答が truncated になる」閾値で、書き込みの
+// 上限ではない（超えた分は raw_url から読み直すので保存自体は通る）。
+// ただし 10MB を超えると raw_url でも読めず git clone が必要になり、
+// このアプリからは二度と読み出せなくなるので、そこだけは送信前に止める。
+const GIST_HARD_BYTES = 10 * 1024 * 1024;   // これを超えると読み出せなくなる
+const GIST_WARN_BYTES = 1024 * 1024;        // これを超えると読み込みが1往復増える
 
 function byteSize(str) { return new TextEncoder().encode(str).length; }
 
@@ -1043,7 +1119,6 @@ function pruneUnusedImages(page) {
     while ((m = re.exec(text || ''))) used.add(m[1]);
   };
   scan(page.content);
-  (page.history || []).forEach(h => scan(h.content));
   // 編集中のページは、まだ page.content に反映されていない
   // 貼り付け直後の画像を消さないよう textarea の中身も見る
   if (page.id === currentPageId) scan(document.getElementById('editor')?.value);
@@ -1055,13 +1130,13 @@ function pruneUnusedImages(page) {
   return removed;
 }
 
-function saveErrorHint(status, message) {
+function saveErrorHint(status, message, bytes) {
   if (status === 401) return 'GitHub Token が無効か期限切れです — 設定を確認してください';
   if (status === 403) return /rate limit/i.test(message || '')
     ? 'API のレート制限に達しました — しばらく待ってから保存してください'
     : 'Token の権限が足りません — gist スコープ付きのトークンが必要です';
   if (status === 409) return '他の端末の保存と競合しました — 再読み込みしてからやり直してください';
-  if (status === 413 || status === 422) return 'データが大きすぎて保存できません — 画像を減らすか、履歴保持数を小さくしてください';
+  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。画像を減らすか、履歴保持数を小さくしてください`;
   if (status >= 500) return `GitHub 側の障害です (HTTP ${status}) — 少し待ってから保存してください`;
   return message || `HTTP ${status}`;
 }
@@ -1089,6 +1164,8 @@ async function doSaveToBin() {
   saveBtn.disabled = true;
   saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
 
+  // 編集履歴は保持しない。以前のデータに残っている分もここで落とす
+  (wikiData.pages || []).forEach(page => { delete page.history; });
   (wikiData.pages || []).forEach(pruneUnusedImages);
 
   const content = JSON.stringify(wikiData);
@@ -1097,8 +1174,8 @@ async function doSaveToBin() {
   const files = { [GIST_FILE]: { content } };
 
   try {
-    if (bytes > GIST_MAX_BYTES) {
-      throw new Error(`データが ${formatSize(bytes)} で Gist の上限 1MB を超えています — 画像を減らすか、履歴保持数を小さくしてください`);
+    if (bytes > GIST_HARD_BYTES) {
+      throw new Error(`データが ${formatSize(bytes)} で Gist の 10MB を超えます — このまま保存すると読み出せなくなるため中止しました。画像を減らすか、履歴保持数を小さくしてください`);
     }
     if (!cfg.binId) {
       // 新規 Gist 作成（通信エラーでの再送は Gist が二重にできるので行わない）
@@ -1107,7 +1184,7 @@ async function doSaveToBin() {
         headers: writeHeaders(),
         body: JSON.stringify({ description: 'wiki data', public: false, files })
       }, 3, false);
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
       const j = await res.json();
       cfg.binId = j.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
@@ -1126,12 +1203,12 @@ async function doSaveToBin() {
         localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
         return doSaveToBin();
       }
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
     }
     dirty = false;
     clearDraft();
     setStatus(bytes > GIST_WARN_BYTES
-      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} / 上限 1MB が近づいています）`
+      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} — 1MB を超えたので読み込みが少し遅くなります）`
       : '保存済み — ' + new Date().toLocaleTimeString('ja-JP'),
       bytes > GIST_WARN_BYTES);
     return true;
@@ -1242,7 +1319,7 @@ function closeNewPage() {
 function createPage() {
   const title = document.getElementById('new-page-title').value.trim();
   if (!title) return;
-  const page = { id: uid(), title, content: '', history: [], images: {} };
+  const page = { id: uid(), title, content: '', images: {} };
   wikiData.pages.push(page);
   closeNewPage();
   renderPageList();
@@ -1277,13 +1354,6 @@ async function savePage() {
 
   const newTitle   = document.getElementById('page-title-input').value.trim() || '無題';
   const newContent = document.getElementById('editor').value;
-
-  // Push to history before overwriting
-  if (page.content !== newContent || page.title !== newTitle) {
-    page.history = page.history || [];
-    page.history.unshift({ ts: Date.now(), title: page.title, content: page.content });
-    if (page.history.length > cfg.histMax) page.history.length = cfg.histMax;
-  }
 
   page.title   = newTitle;
   page.content = newContent;
@@ -1676,45 +1746,6 @@ async function confirmDelete() {
   closeDeleteModal();
   renderPageList();
   await saveToBin();
-}
-
-// ─── History ─────────────────────────────────────────
-function openHistory() {
-  const page = getPage(currentPageId);
-  const list = document.getElementById('history-list');
-  const history = page?.history || [];
-
-  if (history.length === 0) {
-    list.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--text-muted);text-align:center">履歴なし</div>';
-  } else {
-    list.innerHTML = history.map((h, i) => `
-      <div class="history-item" onclick="restoreHistory(${i})" title="クリックで復元">
-        <div>
-          <div style="font-size:13px;font-weight:500">${escHtml(h.title || '無題')}</div>
-          <div class="history-meta">${new Date(h.ts).toLocaleString('ja-JP')}</div>
-        </div>
-        <div class="history-preview">${escHtml((h.content || '').slice(0, 60))}</div>
-      </div>
-    `).join('');
-  }
-
-  document.getElementById('history-modal').classList.add('open');
-}
-
-function closeHistory() {
-  document.getElementById('history-modal').classList.remove('open');
-}
-
-function restoreHistory(index) {
-  const page = getPage(currentPageId);
-  if (!page) return;
-  const h = page.history[index];
-  if (!h) return;
-  if (!confirm(`${new Date(h.ts).toLocaleString('ja-JP')} の内容に復元しますか？`)) return;
-  document.getElementById('page-title-input').value = h.title || '';
-  document.getElementById('editor').value = h.content || '';
-  markDirty();
-  closeHistory();
 }
 
 // ─── Editor / Preview ────────────────────────────────
