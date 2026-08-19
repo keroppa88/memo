@@ -1019,10 +1019,12 @@ async function loadFromBin() {
   }
 }
 
-// Gist の 1 ファイルは 1MB を超えると API から書き込めない。
-// 画像（データURL）と履歴で膨らむので、超える前に気づけるようにする。
-const GIST_MAX_BYTES  = 1024 * 1024;
-const GIST_WARN_BYTES = 800 * 1024;
+// Gist の容量。1MB は「API の応答が truncated になる」閾値で、書き込みの
+// 上限ではない（超えた分は raw_url から読み直すので保存自体は通る）。
+// ただし 10MB を超えると raw_url でも読めず git clone が必要になり、
+// このアプリからは二度と読み出せなくなるので、そこだけは送信前に止める。
+const GIST_HARD_BYTES = 10 * 1024 * 1024;   // これを超えると読み出せなくなる
+const GIST_WARN_BYTES = 1024 * 1024;        // これを超えると読み込みが1往復増える
 
 function byteSize(str) { return new TextEncoder().encode(str).length; }
 
@@ -1055,13 +1057,13 @@ function pruneUnusedImages(page) {
   return removed;
 }
 
-function saveErrorHint(status, message) {
+function saveErrorHint(status, message, bytes) {
   if (status === 401) return 'GitHub Token が無効か期限切れです — 設定を確認してください';
   if (status === 403) return /rate limit/i.test(message || '')
     ? 'API のレート制限に達しました — しばらく待ってから保存してください'
     : 'Token の権限が足りません — gist スコープ付きのトークンが必要です';
   if (status === 409) return '他の端末の保存と競合しました — 再読み込みしてからやり直してください';
-  if (status === 413 || status === 422) return 'データが大きすぎて保存できません — 画像を減らすか、履歴保持数を小さくしてください';
+  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。画像を減らすか、履歴保持数を小さくしてください`;
   if (status >= 500) return `GitHub 側の障害です (HTTP ${status}) — 少し待ってから保存してください`;
   return message || `HTTP ${status}`;
 }
@@ -1097,8 +1099,8 @@ async function doSaveToBin() {
   const files = { [GIST_FILE]: { content } };
 
   try {
-    if (bytes > GIST_MAX_BYTES) {
-      throw new Error(`データが ${formatSize(bytes)} で Gist の上限 1MB を超えています — 画像を減らすか、履歴保持数を小さくしてください`);
+    if (bytes > GIST_HARD_BYTES) {
+      throw new Error(`データが ${formatSize(bytes)} で Gist の 10MB を超えます — このまま保存すると読み出せなくなるため中止しました。画像を減らすか、履歴保持数を小さくしてください`);
     }
     if (!cfg.binId) {
       // 新規 Gist 作成（通信エラーでの再送は Gist が二重にできるので行わない）
@@ -1107,7 +1109,7 @@ async function doSaveToBin() {
         headers: writeHeaders(),
         body: JSON.stringify({ description: 'wiki data', public: false, files })
       }, 3, false);
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
       const j = await res.json();
       cfg.binId = j.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
@@ -1126,12 +1128,12 @@ async function doSaveToBin() {
         localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
         return doSaveToBin();
       }
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message, bytes)); }
     }
     dirty = false;
     clearDraft();
     setStatus(bytes > GIST_WARN_BYTES
-      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} / 上限 1MB が近づいています）`
+      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} — 1MB を超えたので読み込みが少し遅くなります）`
       : '保存済み — ' + new Date().toLocaleTimeString('ja-JP'),
       bytes > GIST_WARN_BYTES);
     return true;
