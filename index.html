@@ -745,6 +745,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyColumns();
   renderPageList();
   startPollingIfReadonly();
+  if (!isReadonly()) offerDraftRestore();
 
   // ─── Image paste ─────────────────────────────────
   document.getElementById('editor').addEventListener('paste', (e) => {
@@ -921,16 +922,48 @@ async function pollUpdate() {
 }
 
 // ─── GitHub Gist API ─────────────────────────────────
-async function fetchWithRetry(url, options, maxRetries = 3) {
-  let delay = 2000;
-  for (let i = 0; i <= maxRetries; i++) {
-    const res = await fetch(url, options);
-    if (res.status !== 429) return res;
-    if (i === maxRetries) return res;
-    setStatus(`レート制限 — ${delay / 1000}秒後に再試行…`, true);
-    await new Promise(r => setTimeout(r, delay));
-    delay *= 2;
+const NET_TIMEOUT_MS = 30000;   // 応答が返らないまま固まり続けるのを防ぐ
+
+async function fetchWithTimeout(url, options = {}, ms = NET_TIMEOUT_MS) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ctl.signal });
+  } catch (e) {
+    if (ctl.signal.aborted) throw new Error(`応答がありません（${ms / 1000}秒でタイムアウト）`);
+    throw new Error('ネットワークに接続できません');
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+// 429（レート制限）、5xx（GitHub 側の一時障害）、通信エラーを再試行する。
+// retryOnNetworkError = false のときは通信エラーを再試行しない
+// （POST を再送すると Gist が二重にできるため）。
+async function fetchWithRetry(url, options, maxRetries = 3, retryOnNetworkError = true) {
+  let delay = 2000;
+  let lastRes = null, lastErr = null;
+  for (let i = 0; i <= maxRetries; i++) {
+    if (i > 0) {
+      const why = lastRes
+        ? (lastRes.status === 429 ? 'レート制限' : `HTTP ${lastRes.status}`)
+        : (lastErr?.message || '通信エラー');
+      setStatus(`${why} — ${delay / 1000}秒後に再試行 (${i}/${maxRetries})…`, true);
+      await new Promise(r => setTimeout(r, delay));
+      delay *= 2;
+    }
+    lastRes = null; lastErr = null;
+    try {
+      const res = await fetchWithTimeout(url, options);
+      if (res.status !== 429 && res.status < 500) return res;
+      lastRes = res;
+    } catch (e) {
+      if (!retryOnNetworkError) throw e;
+      lastErr = e;
+    }
+  }
+  if (lastRes) return lastRes;
+  throw lastErr || new Error('通信に失敗しました');
 }
 
 async function gistContent(fileObj) {
@@ -986,25 +1019,95 @@ async function loadFromBin() {
   }
 }
 
-async function saveToBin() {
+// Gist の 1 ファイルは 1MB を超えると API から書き込めない。
+// 画像（データURL）と履歴で膨らむので、超える前に気づけるようにする。
+const GIST_MAX_BYTES  = 1024 * 1024;
+const GIST_WARN_BYTES = 800 * 1024;
+
+function byteSize(str) { return new TextEncoder().encode(str).length; }
+
+function formatSize(bytes) {
+  return bytes >= 1024 * 1024
+    ? (bytes / 1024 / 1024).toFixed(2) + ' MB'
+    : Math.round(bytes / 1024) + ' KB';
+}
+
+// 貼り付けた画像は本文から消しても page.images に残り続け、保存のたびに
+// Gist へ送られる。どこからも参照されていないものは落として肥大化を防ぐ。
+function pruneUnusedImages(page) {
+  if (!page || !page.images) return 0;
+  const used = new Set();
+  const scan = (text) => {
+    const re = /\(img:([^)\s]+)\)/g;
+    let m;
+    while ((m = re.exec(text || ''))) used.add(m[1]);
+  };
+  scan(page.content);
+  (page.history || []).forEach(h => scan(h.content));
+  // 編集中のページは、まだ page.content に反映されていない
+  // 貼り付け直後の画像を消さないよう textarea の中身も見る
+  if (page.id === currentPageId) scan(document.getElementById('editor')?.value);
+
+  let removed = 0;
+  for (const id of Object.keys(page.images)) {
+    if (!used.has(id)) { delete page.images[id]; removed++; }
+  }
+  return removed;
+}
+
+function saveErrorHint(status, message) {
+  if (status === 401) return 'GitHub Token が無効か期限切れです — 設定を確認してください';
+  if (status === 403) return /rate limit/i.test(message || '')
+    ? 'API のレート制限に達しました — しばらく待ってから保存してください'
+    : 'Token の権限が足りません — gist スコープ付きのトークンが必要です';
+  if (status === 409) return '他の端末の保存と競合しました — 再読み込みしてからやり直してください';
+  if (status === 413 || status === 422) return 'データが大きすぎて保存できません — 画像を減らすか、履歴保持数を小さくしてください';
+  if (status >= 500) return `GitHub 側の障害です (HTTP ${status}) — 少し待ってから保存してください`;
+  return message || `HTTP ${status}`;
+}
+
+// 保存の直列化。保存ボタン連打・Ctrl+S・スクショ保存・削除時の保存が重なると
+// 同じ Gist への PATCH が競合して失敗するので、走るのは常に 1 本だけにする。
+let saveChain   = Promise.resolve(false);
+let queuedSaves = 0;
+
+function saveToBin() {
+  // 実行中の保存の後に走る保存が既に予約済みなら、それが最新の wikiData を
+  // 送るので追加で積む必要はない
+  if (queuedSaves > 0) return saveChain;
+  queuedSaves++;
+  saveChain = saveChain.catch(() => false).then(() => {
+    queuedSaves--;
+    return doSaveToBin();
+  });
+  return saveChain;
+}
+
+async function doSaveToBin() {
   if (!cfg.apiKey) { alert('GitHub Token を設定してください'); openSettings(); return false; }
   const saveBtn = document.getElementById('save-btn');
   saveBtn.disabled = true;
   saveBtn.innerHTML = '<span class="spinner"></span> 保存中';
 
+  (wikiData.pages || []).forEach(pruneUnusedImages);
+
   const content = JSON.stringify(wikiData);
-  console.log('[wiki] saveToBin: binId =', cfg.binId, '/ pages =', wikiData.pages?.length, '/ content length =', content.length);
+  const bytes = byteSize(content);
+  console.log('[wiki] saveToBin: binId =', cfg.binId, '/ pages =', wikiData.pages?.length, '/ size =', formatSize(bytes));
   const files = { [GIST_FILE]: { content } };
 
   try {
+    if (bytes > GIST_MAX_BYTES) {
+      throw new Error(`データが ${formatSize(bytes)} で Gist の上限 1MB を超えています — 画像を減らすか、履歴保持数を小さくしてください`);
+    }
     if (!cfg.binId) {
-      // 新規 Gist 作成
+      // 新規 Gist 作成（通信エラーでの再送は Gist が二重にできるので行わない）
       const res = await fetchWithRetry(GIST_API, {
         method: 'POST',
         headers: writeHeaders(),
         body: JSON.stringify({ description: 'wiki data', public: false, files })
-      });
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message || `HTTP ${res.status}`); }
+      }, 3, false);
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
       const j = await res.json();
       cfg.binId = j.id;
       localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
@@ -1017,23 +1120,91 @@ async function saveToBin() {
         body: JSON.stringify({ files })
       });
       if (res.status === 404) {
-        // Gist が存在しない（旧 JSONBin ID 等）→ 新規作成にフォールバック
+        // Gist が存在しない（旧 JSONBin ID 等）→ 新規作成にフォールバック。
+        // saveToBin() 経由だと自分の完了を待つことになるので直接呼ぶ
         cfg.binId = '';
         localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
-        return saveToBin();
+        return doSaveToBin();
       }
-      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.message || `HTTP ${res.status}`); }
+      if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(saveErrorHint(res.status, b.message)); }
     }
     dirty = false;
-    setStatus('保存済み — ' + new Date().toLocaleTimeString('ja-JP'));
+    clearDraft();
+    setStatus(bytes > GIST_WARN_BYTES
+      ? `保存済み — ${new Date().toLocaleTimeString('ja-JP')}（${formatSize(bytes)} / 上限 1MB が近づいています）`
+      : '保存済み — ' + new Date().toLocaleTimeString('ja-JP'),
+      bytes > GIST_WARN_BYTES);
     return true;
   } catch (e) {
-    setStatus('保存失敗: ' + e.message, true);
+    saveDraft();   // 失敗した編集内容をこの端末に退避しておく
+    setStatus('保存失敗: ' + e.message + '（内容はこの端末に一時保存しました）', true);
     return false;
   } finally {
     saveBtn.disabled = false;
     saveBtn.textContent = '保存';
   }
+}
+
+// ─── ローカル下書き（保存失敗・タブを閉じたときの保険） ───
+// Gist への保存が失敗しても編集内容が消えないよう、編集中は端末側に控えを残す。
+const DRAFT_KEY = 'wiki_draft';
+let draftTimer = null;
+
+function currentDraft() {
+  if (!currentPageId) return null;
+  const titleEl  = document.getElementById('page-title-input');
+  const editorEl = document.getElementById('editor');
+  if (!titleEl || !editorEl) return null;
+  return {
+    ts: Date.now(),
+    pageId: currentPageId,
+    title: titleEl.value,
+    content: editorEl.value,
+    // 貼り付けたばかりの画像はまだ Gist にないので一緒に退避する
+    images: getPage(currentPageId)?.images || {}
+  };
+}
+
+function saveDraft() {
+  const d = currentDraft();
+  if (!d) return;
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+  } catch {
+    // 画像込みだと localStorage の容量を超えることがある → 本文だけでも残す
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, images: {} })); } catch {}
+  }
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch {}
+}
+
+function scheduleDraftSave() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraft, 800);
+}
+
+// 起動時、前回保存できずに終わった編集が残っていれば復元を促す
+function offerDraftRestore() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch {}
+  if (!d || !d.pageId) return;
+  const page = getPage(d.pageId);
+  if (!page) { clearDraft(); return; }
+  if (page.content === d.content && page.title === d.title) { clearDraft(); return; }
+
+  const when = new Date(d.ts).toLocaleString('ja-JP');
+  if (!confirm(`保存されていない編集が残っています（${page.title} / ${when}）。復元しますか？`)) {
+    clearDraft();
+    return;
+  }
+  page.images = { ...(page.images || {}), ...(d.images || {}) };
+  selectPage(d.pageId);
+  document.getElementById('page-title-input').value = d.title;
+  document.getElementById('editor').value = d.content;
+  markDirty();
+  setStatus('未保存の編集を復元しました — 保存を押してください', true);
 }
 
 // ─── Page list ───────────────────────────────────────
@@ -2011,6 +2182,7 @@ function showEmpty() {
 function markDirty() {
   dirty = true;
   setStatus('未保存の変更あり ●');
+  scheduleDraftSave();
 }
 
 function setStatus(msg, isError = false) {
@@ -2042,6 +2214,14 @@ function escHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// 未保存のまま閉じられそうなときは警告し、下書きも即座に書き出す
+window.addEventListener('beforeunload', (e) => {
+  if (!dirty) return;
+  saveDraft();
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 // Keyboard shortcut: Ctrl+S / Cmd+S to save
 document.addEventListener('keydown', e => {
