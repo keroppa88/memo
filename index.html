@@ -630,8 +630,7 @@
       <label>画像の幅（px）</label>
       <input type="number" id="cfg-imgwidth" min="200" max="2000" step="50" value="600">
       <div class="hint">貼り付けた画像はこの幅に揃えて保存されます。容量のほとんどは画像なので、小さいほど保存が軽くなります。</div>
-      <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="shrinkAllImages()" id="shrink-all-btn">🖼 これまでの画像も今の幅に揃える</button>
-      <div class="hint" style="margin-top:4px;">押すと先に現在のデータを memo-backup-日時.json に書き出します。縮小は元に戻せないので、そのファイルが戻し道になります。</div>
+      <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="downloadBackup()">💾 バックアップを書き出す</button>
       <button type="button" class="btn btn-outline" style="margin-top:6px;font-size:12px;" onclick="document.getElementById('restore-file').click()">↩ バックアップから復元</button>
       <input type="file" id="restore-file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])restoreBackup(this.files[0]);this.value=''">
       <div id="shrink-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
@@ -810,58 +809,14 @@ function describeOversizedImages() {
     + `1枚あたり平均 ${formatSize(Math.round(imgBytes / count))}。`;
 }
 
-// 既にある画像をまとめて今の幅に揃える。元に戻せないので、
-// 実行前に現在のデータをファイルに書き出しておく。
-async function shrinkAllImages() {
-  const btn  = document.getElementById('shrink-all-btn');
-  const hint = document.getElementById('shrink-hint');
-  if (isReadonly()) { alert('編集するには GitHub Token が必要です'); return; }
-
-  const width = clampImgWidth(document.getElementById('cfg-imgwidth').value);
-  const targets = [];
-  for (const page of wikiData.pages || []) {
-    for (const id of Object.keys(page.images || {})) targets.push({ page, id });
-  }
-  if (!targets.length) { hint.textContent = '縮小できる画像がありません。'; return; }
-
-  const before = targets.reduce((n, t) => n + t.page.images[t.id].length, 0);
-  if (!confirm(`画像 ${targets.length} 枚を幅 ${width}px に揃えます。\n元の画質には戻せません。\n\n実行前に現在のデータをバックアップとして保存します。よろしいですか？`)) return;
-
-  btn.disabled = true;
-  btn.textContent = 'バックアップを保存中…';
-  if (!await downloadBackup()) {
-    btn.textContent = '🖼 これまでの画像も今の幅に揃える';
-    btn.disabled = false;
-    hint.textContent = 'バックアップを保存しなかったので中止しました。';
-    return;
-  }
-
-  let done = 0;
-  for (const t of targets) {
-    btn.textContent = `変換中… ${++done}/${targets.length}`;
-    t.page.images[t.id] = await shrinkImageDataUrl(t.page.images[t.id], width);
-  }
-
-  const after = targets.reduce((n, t) => n + t.page.images[t.id].length, 0);
-  btn.textContent = '🖼 これまでの画像も今の幅に揃える';
-  btn.disabled = false;
-  hint.textContent = `${targets.length} 枚を変換: ${formatSize(before)} → ${formatSize(after)}。保存すると確定します。`;
-
-  cfg.imgWidth = width;
-  localStorage.setItem('wiki_cfg', JSON.stringify(cfg));
-  if (await saveToBin()) hint.textContent += ' 保存しました。';
-  if (currentMode === 'preview') renderPreview();
-}
-
 // 現在のデータをまるごとファイルに書き出す。
-// 縮小は元に戻せないので、これが唯一の戻し道になる。
-// 保存できたかどうかを返す（キャンセルされたら false）。
+// 「バックアップから復元」で読み戻せる。
 async function downloadBackup() {
+  const hint = document.getElementById('shrink-hint');
   const json = JSON.stringify(wikiData);
   const name = `memo-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.json`;
 
-  // 保存ダイアログの結果が分かる方（Chrome / Edge）を優先する。
-  // キャンセルされたのに処理を進めてしまうと、戻し道がないまま変換される。
+  // 保存ダイアログの結果が分かる方（Chrome / Edge）を優先する
   if (window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
@@ -871,15 +826,15 @@ async function downloadBackup() {
       const w = await handle.createWritable();
       await w.write(json);
       await w.close();
+      hint.textContent = `${handle.name} に書き出しました（${formatSize(byteSize(json))}）。`;
       return true;
     } catch (e) {
-      if (e && e.name === 'AbortError') return false;   // キャンセル
+      if (e && e.name === 'AbortError') { hint.textContent = '書き出しをやめました。'; return false; }
       console.warn('[wiki] バックアップの保存に失敗、ダウンロードに切り替えます:', e);
     }
   }
 
-  // 非対応ブラウザはダウンロードに落とす。こちらは結果が分からないので
-  // 保存できたか本人に確かめる。
+  // 非対応ブラウザはダウンロードに落とす
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -888,7 +843,8 @@ async function downloadBackup() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-  return confirm(`${name} をダウンロードしました。\n保存できていることを確かめてから「OK」を押してください。\n\n（キャンセルすると縮小せずに中止します）`);
+  hint.textContent = `${name} をダウンロードしました（${formatSize(byteSize(json))}）。`;
+  return true;
 }
 
 // バックアップした JSON を読み込んで元に戻す
@@ -1304,7 +1260,7 @@ function saveErrorHint(status, message, bytes) {
     ? 'API のレート制限に達しました — しばらく待ってから保存してください'
     : 'Token の権限が足りません — gist スコープ付きのトークンが必要です';
   if (status === 409) return '他の端末の保存と競合しました — 再読み込みしてからやり直してください';
-  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。設定の「これまでの画像も今の幅に揃える」を試してください`;
+  if (status === 413 || status === 422) return `GitHub に受け付けてもらえませんでした${bytes ? `（送ろうとしたデータ ${formatSize(bytes)}）` : ''} — 大きすぎる可能性があります。画像を減らすか、ページを分けてください`;
   if (status >= 500) return `GitHub 側の障害です (HTTP ${status}) — 少し待ってから保存してください`;
   return message || `HTTP ${status}`;
 }
@@ -1367,7 +1323,6 @@ async function doSaveToBin() {
     if (total > GIST_HARD_BYTES && !confirmedOversize) {
       const msg = `データが ${formatSize(total)} あります（Gist の目安は 10MB）。\n`
         + `このまま保存すると、あとで読み出せなくなる可能性があります。\n\n`
-        + `設定の「これまでの画像も今の幅に揃える」で大きく減らせます。\n\n`
         + `このまま保存しますか？`;
       if (!confirm(msg)) throw new Error(`保存を中止しました（${formatSize(total)}）`);
       // 一度確認したらこのセッションでは聞き直さない
