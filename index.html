@@ -558,6 +558,7 @@
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
     <button class="btn btn-outline" id="arrange-btn" onclick="toggleArrange()" title="高さの近いツイートを同じ行に集めて余白を減らす（表示のみ・本文は変わりません）">整列</button>
+    <button class="btn btn-outline" id="remove-blank-lines-btn" onclick="removeBlankLinesFromSelection()" title="本文で選択した範囲から空白行をすべて削除">空白行削除</button>
     <span class="header-sep"></span>
     <button class="btn btn-outline btn-arrow" id="row-prev-btn" onclick="stepRow(-1)" title="前の行へ（←キー）">◀</button>
     <button class="btn btn-outline btn-arrow" id="row-next-btn" onclick="stepRow(1)" title="次の行へ（→キー）&#10;→ で送って Shift+P で撮影、の繰り返しで各行を撮れます">▶</button>
@@ -947,6 +948,7 @@ function applyReadonlyMode() {
   document.getElementById('readonly-badge').style.display = ro ? '' : 'none';
   document.getElementById('new-page-btn').style.display   = ro ? 'none' : '';
   document.getElementById('empty-new-btn').style.display  = ro ? 'none' : '';
+  document.getElementById('remove-blank-lines-btn').style.display = ro ? 'none' : '';
   const saveBtn = document.getElementById('save-btn');
   if (saveBtn) saveBtn.style.display = ro ? 'none' : '';
   // title input & editor: readonly when no key
@@ -1910,6 +1912,7 @@ function setMode(mode) {
   const preview = document.getElementById('preview');
   const editBtn = document.getElementById('edit-mode-btn');
   const prevBtn = document.getElementById('preview-mode-btn');
+  const removeBlankLinesBtn = document.getElementById('remove-blank-lines-btn');
 
   if (mode === 'edit') {
     editor.style.display  = 'block';
@@ -1923,6 +1926,50 @@ function setMode(mode) {
     prevBtn.classList.add('active');
     renderPreview();
   }
+  removeBlankLinesBtn.disabled = mode !== 'edit';
+}
+
+function removeBlankLinesFromSelection() {
+  const editor = document.getElementById('editor');
+  if (editor.readOnly || currentMode !== 'edit') return;
+
+  const selectionStart = editor.selectionStart;
+  const selectionEnd = editor.selectionEnd;
+  if (selectionStart === selectionEnd) {
+    setStatus('空白行を削除する範囲を選択してください', true);
+    editor.focus();
+    return;
+  }
+
+  // 選択の端が行の途中でも、対象になった行を丸ごと調べる。
+  // selectionEnd は選択範囲に含まれないため、1文字手前を基準に最終行を決める。
+  const value = editor.value;
+  const rangeStart = selectionStart === 0
+    ? 0
+    : value.lastIndexOf('\n', selectionStart - 1) + 1;
+  const lastSelectedIndex = Math.max(selectionStart, selectionEnd - 1);
+  const nextNewline = value.indexOf('\n', lastSelectedIndex);
+  const rangeEnd = nextNewline === -1 ? value.length : nextNewline + 1;
+  const selectedLines = value.slice(rangeStart, rangeEnd);
+  const hasTrailingNewline = selectedLines.endsWith('\n');
+  const lines = selectedLines.split('\n');
+  if (hasTrailingNewline) lines.pop();
+
+  const keptLines = lines.filter(line => !/^[^\S\r\n]*$/.test(line));
+  const removedCount = lines.length - keptLines.length;
+  if (removedCount === 0) {
+    setStatus('選択範囲に空白行はありません');
+    editor.focus();
+    editor.setSelectionRange(selectionStart, selectionEnd);
+    return;
+  }
+
+  const cleaned = keptLines.join('\n') + (hasTrailingNewline ? '\n' : '');
+  editor.value = value.slice(0, rangeStart) + cleaned + value.slice(rangeEnd);
+  editor.focus();
+  editor.setSelectionRange(rangeStart, rangeStart + cleaned.length);
+  markDirty();
+  setStatus(`選択範囲の空白行を${removedCount}行削除しました — 保存で確定`);
 }
 
 function previewDisplay() { return columnCount > 1 ? 'grid' : 'block'; }
