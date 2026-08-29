@@ -1992,7 +1992,15 @@ function removeBlankLinesFromSelection() {
   const lines = selectedLines.split('\n');
   if (hasTrailingNewline) lines.pop();
 
-  const keptLines = lines.filter(line => !/^[^\S\r\n]*$/.test(line));
+  // 10個以上のハイフンからなる区切り線の直前は、空白を1行だけ残す。
+  // 選択範囲の直後に区切り線がある場合も判定できるよう、その行も参照する。
+  const nextOutsideLine = value.slice(rangeEnd).split('\n', 1)[0];
+  const separatorRe = /^[\t ]*-{10,}[\t ]*$/;
+  const keptLines = lines.filter((line, i) => {
+    if (!/^[^\S\r\n]*$/.test(line)) return true;
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : nextOutsideLine;
+    return separatorRe.test(nextLine);
+  });
   const removedCount = lines.length - keptLines.length;
   if (removedCount === 0) {
     setStatus('選択範囲に空白行はありません');
