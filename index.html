@@ -558,6 +558,7 @@
     <button class="btn btn-outline" id="col2-btn" onclick="setColumns(2)" title="プレビューを2列で表示（もう一度押すと1列に戻る）">2列</button>
     <button class="btn btn-outline" id="col3-btn" onclick="setColumns(3)" title="プレビューを3列で表示（もう一度押すと1列に戻る）">3列</button>
     <button class="btn btn-outline" id="arrange-btn" onclick="toggleArrange()" title="高さの近いツイートを同じ行に集めて余白を減らす（表示のみ・本文は変わりません）">整列</button>
+    <button class="btn btn-outline" id="add-heading-btn" onclick="addHeadingsAfterSeparators()" title="ハイフンが10個以上続く区切り線の次の行を見出しにする">#付与</button>
     <button class="btn btn-outline" id="remove-blank-lines-btn" onclick="removeBlankLinesFromSelection()" title="本文で選択した範囲から空白行をすべて削除">空白行削除</button>
     <span class="header-sep"></span>
     <button class="btn btn-outline btn-arrow" id="row-prev-btn" onclick="stepRow(-1)" title="前の行へ（←キー）">◀</button>
@@ -948,6 +949,7 @@ function applyReadonlyMode() {
   document.getElementById('readonly-badge').style.display = ro ? '' : 'none';
   document.getElementById('new-page-btn').style.display   = ro ? 'none' : '';
   document.getElementById('empty-new-btn').style.display  = ro ? 'none' : '';
+  document.getElementById('add-heading-btn').style.display = ro ? 'none' : '';
   document.getElementById('remove-blank-lines-btn').style.display = ro ? 'none' : '';
   const saveBtn = document.getElementById('save-btn');
   if (saveBtn) saveBtn.style.display = ro ? 'none' : '';
@@ -1912,6 +1914,7 @@ function setMode(mode) {
   const preview = document.getElementById('preview');
   const editBtn = document.getElementById('edit-mode-btn');
   const prevBtn = document.getElementById('preview-mode-btn');
+  const addHeadingBtn = document.getElementById('add-heading-btn');
   const removeBlankLinesBtn = document.getElementById('remove-blank-lines-btn');
 
   if (mode === 'edit') {
@@ -1926,7 +1929,39 @@ function setMode(mode) {
     prevBtn.classList.add('active');
     renderPreview();
   }
+  addHeadingBtn.disabled = mode !== 'edit';
   removeBlankLinesBtn.disabled = mode !== 'edit';
+}
+
+function addHeadingsAfterSeparators() {
+  const editor = document.getElementById('editor');
+  if (editor.readOnly || currentMode !== 'edit' || !currentPageId) return;
+
+  const lines = editor.value.split('\n');
+  let addedCount = 0;
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (!/^[\t ]*-{10,}[\t ]*$/.test(lines[i])) continue;
+
+    const nextLine = lines[i + 1];
+    if (!nextLine.trim()) continue;
+    if (/^[\t ]*#/.test(nextLine)) continue;
+    if (/^[\t ]*-{10,}[\t ]*$/.test(nextLine)) continue;
+
+    lines[i + 1] = '# ' + nextLine;
+    addedCount++;
+  }
+
+  if (addedCount === 0) {
+    setStatus('# を付ける行はありません');
+    editor.focus();
+    return;
+  }
+
+  editor.value = lines.join('\n');
+  markDirty();
+  setStatus(`${addedCount}行の先頭に # を付けました — 保存で確定`);
+  editor.focus();
 }
 
 function removeBlankLinesFromSelection() {
@@ -1967,7 +2002,8 @@ function removeBlankLinesFromSelection() {
   const cleaned = keptLines.join('\n') + (hasTrailingNewline ? '\n' : '');
   editor.value = value.slice(0, rangeStart) + cleaned + value.slice(rangeEnd);
   editor.focus();
-  editor.setSelectionRange(rangeStart, rangeStart + cleaned.length);
+  editor.setSelectionRange(0, 0);
+  editor.scrollTop = 0;
   markDirty();
   setStatus(`選択範囲の空白行を${removedCount}行削除しました — 保存で確定`);
 }
