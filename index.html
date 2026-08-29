@@ -1962,6 +1962,8 @@ function addHeadingsAfterSeparators() {
   markDirty();
   setStatus(`${addedCount}行の先頭に # を付けました — 保存で確定`);
   editor.focus();
+  editor.setSelectionRange(0, 0);
+  editor.scrollTop = 0;
 }
 
 function removeBlankLinesFromSelection() {
